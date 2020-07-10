@@ -27,7 +27,7 @@
 #endif
 
 #define INDEX_ARRAY_SIZE (1024) //1k
-#define DATA_ARRAY_SIZE  (1024*1024*512) //512M
+#define DATA_ARRAY_SIZE  (1024*1024*64) //512M
 
 /*********************** Perf related stuff ************************
  *
@@ -141,7 +141,7 @@ static void read_counters(void)
 	cache_miss_total += cache_misses;
 }
 
-static unsigned int timeout = 100;
+static unsigned int timeout = 5;
 
 static void sigalrm_handler(int junk)
 {
@@ -334,18 +334,18 @@ static void *consumer(void *arg)
 
 		time_diff_ns = compute_timediff(begin, end);
 		if (time_diff_ns > ns_per_msec) {
-			printf("========= WARNING !!!! ===================\n");
-			printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, end.tv_nsec);
-			printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
-		        printf("Diff  = %10lld ns\n", time_diff_ns);
-			printf("========= END WARNING !!!! ===============\n");
+			debug_printf("========= WARNING !!!! ===================\n");
+			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, end.tv_nsec);
+			debug_printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
+		        debug_printf("Diff  = %10lld ns\n", time_diff_ns);
+			debug_printf("========= END WARNING !!!! ===============\n");
 			goto update_done;
 		}
 		iterations++;
 		consumer_time_ns += time_diff_ns;
 		read_counters();
-		reset_counters();
 update_done:
+		reset_counters();
 		idx = 0;
 		debug_printf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
 		data_array[idx] = sum;
@@ -372,15 +372,19 @@ int main(int argc, char *argv[])
 	cpu_set_t cpuset;
 	
 
-	if (argc == 2 || 4) {
+	if (argc == 2 || argc == 4 || argc == 5) {
 		seed = (unsigned int) strtoul(argv[1], NULL, 10);
 	}
 
-	if (argc == 4) {
+	if (argc == 4 || argc == 5) {
 		cpu_producer = (unsigned int) strtoul(argv[2], NULL, 10);
 		cpu_consumer = (unsigned int) strtoul(argv[3], NULL, 10);
 	}
-	
+
+	if (argc == 5) {
+		timeout = (unsigned int) strtoul(argv[4], NULL, 10);
+	}
+
 	srandom(seed);
 	if (pipe(pipe_fd1) || pipe(pipe_fd2)) {
 		printf("Error creating pipes\n");
@@ -422,7 +426,7 @@ int main(int argc, char *argv[])
 			perror("Error setting affinity for producer");
 			exit(1);
 		}
-		printf("Affined producer to CPU %d\n", cpu_producer);
+		//printf("Affined producer to CPU %d\n", cpu_producer);
 	}
 	
 	if (pthread_create(&producer_tid,
@@ -441,7 +445,7 @@ int main(int argc, char *argv[])
 			printf("Error setting affinity for consumer");
 			exit(1);
 		}
-		printf("Affined consumer to CPU %d\n", cpu_producer);
+		//printf("Affined consumer to CPU %d\n", cpu_consumer);
 	}
 
 	if (pthread_create(&consumer_tid,
