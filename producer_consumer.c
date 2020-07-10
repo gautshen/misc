@@ -14,6 +14,9 @@
 #include <limits.h>
 #include <sys/shm.h>
 #include <linux/futex.h>
+#include <sys/ioctl.h>
+#include "perf_event.h"
+
 
 #undef DEBUG
 
@@ -26,14 +29,119 @@
 #define INDEX_ARRAY_SIZE (1024) //1k
 #define DATA_ARRAY_SIZE  (1024*1024*512) //512M
 
+/*********************** Perf related stuff ************************
+ *
+ * From : https://ozlabs.org/~anton/junkcode/perf_events_example1.c
+ *
+ ********************************************************************/
+
+#define USERSPACE_ONLY
+
+#ifndef __NR_perf_event_open
+#if defined(__PPC__)
+#define __NR_perf_event_open	319
+#elif defined(__i386__)
+#define __NR_perf_event_open	336
+#elif defined(__x86_64__)
+#define __NR_perf_event_open	298
+#else
+#error __NR_perf_event_open must be defined
+#endif
+#endif
+
+static inline int sys_perf_event_open(struct perf_event_attr *attr, pid_t pid,
+				      int cpu, int group_fd,
+				      unsigned long flags)
+{
+	attr->size = sizeof(*attr);
+	return syscall(__NR_perf_event_open, attr, pid, cpu, group_fd, flags);
+}
+
+static int cache_refs_fd;
+static int cache_miss_fd;
+
+static void setup_counters(void)
+{
+	struct perf_event_attr attr;
+
+	memset(&attr, 0, sizeof(attr));
+#ifdef USERSPACE_ONLY
+	attr.exclude_kernel = 1;
+	attr.exclude_hv = 1;
+	attr.exclude_idle = 1;
+#endif
+
+	attr.disabled = 1;
+	attr.type = PERF_TYPE_HARDWARE;
+	attr.config = PERF_COUNT_HW_CACHE_REFERENCES;
+	cache_refs_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
+	if (cache_refs_fd < 0) {
+		perror("sys_perf_event_open");
+		exit(1);
+	}
+
+	/*
+	 * We use cache_refs_fd as the group leader in order to ensure
+	 * both counters run at the same time and our CPI statistics are
+	 * valid.
+	 */
+	attr.disabled = 0; /* The group leader will start/stop us */
+	attr.type = PERF_TYPE_HARDWARE;
+	attr.config = PERF_COUNT_HW_CACHE_MISSES;
+	cache_miss_fd = sys_perf_event_open(&attr, 0, -1, cache_refs_fd, 0);
+	if (cache_miss_fd < 0) {
+		perror("sys_perf_event_open");
+		exit(1);
+	}
+}
+
+static void start_counters(void)
+{
+	/* Only need to start and stop the group leader */
+	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
+}
+
+static void stop_counters(void)
+{
+	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
+}
+
+static void reset_counters(void)
+{
+	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
+	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
+}
 
 
 unsigned long iterations;
 unsigned long iterations_prev;
+
 unsigned long long consumer_time_ns;
 unsigned long long consumer_time_ns_prev;
 
-static unsigned int timeout = 60;
+unsigned long long cache_refs_total;
+unsigned long long cache_refs_total_prev;
+
+unsigned long long cache_miss_total;
+unsigned long long cache_miss_total_prev;
+
+static void read_counters(void)
+{
+	size_t res;
+	unsigned long long cache_refs;
+	unsigned long long cache_misses;
+
+	res = read(cache_refs_fd, &cache_refs, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	res = read(cache_miss_fd, &cache_misses, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	cache_refs_total += cache_refs;
+	cache_miss_total += cache_misses;
+}
+
+static unsigned int timeout = 100;
 
 static void sigalrm_handler(int junk)
 {
@@ -42,13 +150,22 @@ static void sigalrm_handler(int junk)
 	unsigned long iter_diff = i - iterations_prev;
 	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
 	unsigned long long avg_time_ns = (time_ns_diff) / iter_diff;
+	unsigned long long k = cache_refs_total;
+	unsigned long long l = cache_miss_total;
+	unsigned long long cache_ref_diff = k - cache_refs_total_prev;
+	unsigned long long avg_cache_ref_diff = cache_ref_diff/iter_diff;
+	unsigned long long cache_miss_diff = l - cache_miss_total_prev;
+	unsigned long long avg_cache_miss_diff = cache_miss_diff/iter_diff;
+	float cache_miss_pct = ((float) cache_miss_diff * 100)/cache_ref_diff;
 
-	printf("%8ld iterations, %10lld ns (avg:%6lld ns per consumer iteration)\n",
-		iter_diff,
-	       time_ns_diff, avg_time_ns);
+	printf("%8ld iterations, avg time:%6lld ns, avg cache-ref:%6lld, avg cache-miss:%6lld (cache-miss rate %3.2f \%)\n",
+		iter_diff, avg_time_ns, avg_cache_ref_diff, avg_cache_miss_diff,
+	        cache_miss_pct);
 
 	iterations_prev = i;
 	consumer_time_ns_prev = j;
+	cache_refs_total_prev = k;
+	cache_miss_total_prev = l;
 
 	if (--timeout == 0)
 		kill(0, SIGUSR1);
@@ -174,6 +291,7 @@ static void *consumer(void *arg)
 	CPU_ZERO(&cpuset);
 	pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
 
+
 	for (i = 0; i < CPU_SETSIZE; i++) {
 		if (CPU_ISSET(i, &cpuset)) 
 			printf("Consumer affined to  CPU %d\n", i);
@@ -184,7 +302,7 @@ static void *consumer(void *arg)
 	debug_printf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n",
 		index_array, data_array);
 
-
+	setup_counters();
 	while (1) {
 		unsigned long idx = 0;
 		volatile unsigned int sum = 0;
@@ -199,6 +317,7 @@ static void *consumer(void *arg)
 		debug_printf("Consume idx_arr_size = %ld\n", idx_arr_size);
 
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begin);
+		start_counters();
 		for (i = 0; i < idx_arr_size; i++) {
 			unsigned long idx;
 			unsigned long data;
@@ -210,7 +329,7 @@ static void *consumer(void *arg)
 				i, idx, idx, data);
 			sum = (sum + data) % INT_MAX;
 		}
-
+		stop_counters();
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end);
 
 		time_diff_ns = compute_timediff(begin, end);
@@ -224,6 +343,8 @@ static void *consumer(void *arg)
 		}
 		iterations++;
 		consumer_time_ns += time_diff_ns;
+		read_counters();
+		reset_counters();
 update_done:
 		idx = 0;
 		debug_printf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
