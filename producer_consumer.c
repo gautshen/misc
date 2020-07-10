@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <limits.h>
 #include <sys/shm.h>
 #include <linux/futex.h>
@@ -17,26 +18,37 @@
 #undef DEBUG
 
 #ifdef DEBUG
-#define dprintf(fmt,...)    printf(fmt,...)
+#define debug_printf(fmt...)    printf(fmt)
 #else
-#define dprintf(fmt,...)
+#define debug_printf(fmt...)
 #endif
 
-#define INDEX_ARRAY_SIZE (256) //1k
-#define DATA_ARRAY_SIZE  (1024*1024*512) //256M
-unsigned long seed = 6407741;
+#define INDEX_ARRAY_SIZE (1024) //1k
+#define DATA_ARRAY_SIZE  (1024*1024*512) //512M
+
 
 
 unsigned long iterations;
 unsigned long iterations_prev;
-static unsigned int timeout = 10;
+unsigned long long consumer_time_ns;
+unsigned long long consumer_time_ns_prev;
+
+static unsigned int timeout = 60;
 
 static void sigalrm_handler(int junk)
 {
 	unsigned long i = iterations;
+	unsigned long long j = consumer_time_ns;
+	unsigned long iter_diff = i - iterations_prev;
+	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
+	unsigned long long avg_time_ns = (time_ns_diff) / iter_diff;
 
-	printf("%ld\n", i - iterations_prev);
+	printf("%8ld iterations, %10lld ns (avg:%6lld ns per consumer iteration)\n",
+		iter_diff,
+	       time_ns_diff, avg_time_ns);
+
 	iterations_prev = i;
+	consumer_time_ns_prev = j;
 
 	if (--timeout == 0)
 		kill(0, SIGUSR1);
@@ -85,9 +97,9 @@ static void *producer(void *arg)
 			printf("Producer affined to  CPU %d\n", i);
 	}
 
-	dprintf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
+	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
-	dprintf("Producer : idx_array = 0x%llx,  data_array = 0x%llx\n",
+	debug_printf("Producer : idx_array = 0x%llx,  data_array = 0x%llx\n",
 		index_array, data_array);
 	
 	signal(SIGALRM, sigalrm_handler);
@@ -95,7 +107,7 @@ static void *producer(void *arg)
 
 	while (1) {
 
-		dprintf("Producer while begin\n");
+		debug_printf("Producer while begin\n");
 		/*
 		 * We will write to p->idx_array_size random locations within
 		 * the p->data_array. We record where we have written in
@@ -109,21 +121,43 @@ static void *producer(void *arg)
 			idx += 128;
 			data = random() % UINT_MAX;
 
-			dprintf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
+			debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
 			index_array[i] = idx;
 			data_array[idx] = data;
 		}
 
-		dprintf("Producer writing to pipe\n");
+		debug_printf("Producer writing to pipe\n");
 		assert(write(pipe_fd2[WRITE], &c, 1) == 1);
 
-		dprintf("Producer waiting\n");
+		debug_printf("Producer waiting\n");
 		assert(read(pipe_fd1[READ], &c, 1) == 1);
-		dprintf("Producer read from pipe\n");
+		debug_printf("Producer read from pipe\n");
 	}
 
 	return NULL;
+}
+
+static unsigned long long compute_timediff(struct timespec before, struct timespec after)
+{
+	unsigned long long ret_ns;
+	unsigned long long ns_per_sec = 1000UL*1000*1000;
+
+	if (after.tv_sec == before.tv_sec) {
+		ret_ns = after.tv_nsec - before.tv_nsec;
+
+		return ret_ns;
+	}
+
+	if (after.tv_sec > before.tv_sec) {
+		unsigned long long diff_ns = 0;
+
+		diff_ns = (after.tv_sec - before.tv_sec) * ns_per_sec;
+		ret_ns = diff_ns + after.tv_nsec - before.tv_nsec;
+		return ret_ns;
+	}
+
+	return 0;
 }
 
 static void *consumer(void *arg)
@@ -145,23 +179,26 @@ static void *consumer(void *arg)
 			printf("Consumer affined to  CPU %d\n", i);
 	}
 
-	dprintf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
+	debug_printf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
-	dprintf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n",
+	debug_printf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n",
 		index_array, data_array);
 
 
 	while (1) {
 		unsigned long idx = 0;
 		volatile unsigned int sum = 0;
-		
+		struct timespec begin, end;
+		unsigned long long time_diff_ns;
+		const unsigned long long ns_per_msec = 1000*1000;
 
-		dprintf("Consumer While begin\n");
-		dprintf("Consumer waiting\n");
+		debug_printf("Consumer While begin\n");
+		debug_printf("Consumer waiting\n");
 		assert(read(pipe_fd2[READ], &c, 1) == 1);
-		dprintf("Consumer read from pipe\n");
-		dprintf("Consume idx_arr_size = %ld\n", idx_arr_size);
+		debug_printf("Consumer read from pipe\n");
+		debug_printf("Consume idx_arr_size = %ld\n", idx_arr_size);
 
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begin);
 		for (i = 0; i < idx_arr_size; i++) {
 			unsigned long idx;
 			unsigned long data;
@@ -169,20 +206,31 @@ static void *consumer(void *arg)
 			idx = index_array[i];
 			data = data_array[idx];
 
-			dprintf("Consumer : [%d] = %ld,  [%ld] = 0x%llx\n",
+			debug_printf("Consumer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
 			sum = (sum + data) % INT_MAX;
 		}
 
-		iterations++;
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end);
 
+		time_diff_ns = compute_timediff(begin, end);
+		if (time_diff_ns > ns_per_msec) {
+			printf("========= WARNING !!!! ===================\n");
+			printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, end.tv_nsec);
+			printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
+		        printf("Diff  = %10lld ns\n", time_diff_ns);
+			printf("========= END WARNING !!!! ===============\n");
+			goto update_done;
+		}
+		iterations++;
+		consumer_time_ns += time_diff_ns;
+update_done:
 		idx = 0;
-		dprintf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
+		debug_printf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
 		data_array[idx] = sum;
 
-		dprintf("Consumer writing to pipe\n");
+		debug_printf("Consumer writing to pipe\n");
 		assert(write(pipe_fd1[WRITE], &c, 1) == 1);
-
 	}
 
 	return NULL;
@@ -198,7 +246,8 @@ int main(int argc, char *argv[])
 	unsigned long *idx_arr, *data_arr;
 	int idx_arr_size = INDEX_ARRAY_SIZE;
 	int data_arr_size =  DATA_ARRAY_SIZE;
-	int cpu_producer = 0, cpu_consumer = 8;
+	int cpu_producer = -1, cpu_consumer = -1;
+	unsigned long seed = 6407741;
 	cpu_set_t cpuset;
 	
 
@@ -208,7 +257,7 @@ int main(int argc, char *argv[])
 
 	if (argc == 4) {
 		cpu_producer = (unsigned int) strtoul(argv[2], NULL, 10);
-		cpu_consumer = (unsigned int) strtoul(argv[3], NULL, 10);		
+		cpu_consumer = (unsigned int) strtoul(argv[3], NULL, 10);
 	}
 	
 	srandom(seed);
@@ -242,13 +291,17 @@ int main(int argc, char *argv[])
 	setpgid(getpid(), getpid());
 	signal(SIGUSR1, sigusr1_handler);
 
-	CPU_ZERO(&cpuset);
-	CPU_SET(cpu_producer, &cpuset);
 	pthread_attr_init(&producer_attr);
-	if (pthread_attr_setaffinity_np(&producer_attr, sizeof(cpu_set_t),
-					&cpuset)) {
-		perror("Error setting affinity for producer");
-		exit(1);
+	if (cpu_producer != -1) {
+		CPU_ZERO(&cpuset);
+		CPU_SET(cpu_producer, &cpuset);
+		if (pthread_attr_setaffinity_np(&producer_attr,
+						sizeof(cpu_set_t),
+						&cpuset)) {
+			perror("Error setting affinity for producer");
+			exit(1);
+		}
+		printf("Affined producer to CPU %d\n", cpu_producer);
 	}
 	
 	if (pthread_create(&producer_tid,
@@ -257,16 +310,19 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	printf("Affined producer to CPU %d\n", cpu_producer);
 	pthread_attr_init(&consumer_attr);
-	CPU_ZERO(&cpuset);
-	CPU_SET(cpu_consumer, &cpuset);
-	if (pthread_attr_setaffinity_np(&consumer_attr, sizeof(cpu_set_t),
-					&cpuset)) {
-		perror("Error setting affinity for consumer");
-		exit(1);
+	if (cpu_consumer != -1) {
+		CPU_ZERO(&cpuset);
+		CPU_SET(cpu_consumer, &cpuset);
+		if (pthread_attr_setaffinity_np(&consumer_attr,
+						sizeof(cpu_set_t),
+						&cpuset)) {
+			printf("Error setting affinity for consumer");
+			exit(1);
+		}
+		printf("Affined consumer to CPU %d\n", cpu_producer);
 	}
-	printf("Affined consumer to CPU %d\n", cpu_consumer);	
+
 	if (pthread_create(&consumer_tid,
 			   &consumer_attr, consumer, &consumer_args)) {
 		printf("Error creating the consumer\n");
