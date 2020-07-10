@@ -85,10 +85,10 @@ static void *producer(void *arg)
 			printf("Producer affined to  CPU %d\n", i);
 	}
 
-	/* printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n", */
-	/* 	idx_arr_size, data_arr_size); */
-	/* printf("Producer : idx_array = 0x%llx,  data_array = 0x%llx\n", */
-	/* 	index_array, data_array); */
+	dprintf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
+		idx_arr_size, data_arr_size);
+	dprintf("Producer : idx_array = 0x%llx,  data_array = 0x%llx\n",
+		index_array, data_array);
 	
 	signal(SIGALRM, sigalrm_handler);
 	alarm(1);
@@ -117,11 +117,9 @@ static void *producer(void *arg)
 
 		dprintf("Producer writing to pipe\n");
 		assert(write(pipe_fd2[WRITE], &c, 1) == 1);
-//		touch();
 
 		dprintf("Producer waiting\n");
 		assert(read(pipe_fd1[READ], &c, 1) == 1);
-//		touch();
 		dprintf("Producer read from pipe\n");
 		iterations += 2;
 	}
@@ -148,10 +146,10 @@ static void *consumer(void *arg)
 			printf("Consumer affined to  CPU %d\n", i);
 	}
 
-	/* printf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n", */
-	/* 	idx_arr_size, data_arr_size); */
-	/* printf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n", */
-	/* 	index_array, data_array); */
+	dprintf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
+		idx_arr_size, data_arr_size);
+	dprintf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n",
+		index_array, data_array);
 
 
 	while (1) {
@@ -162,7 +160,6 @@ static void *consumer(void *arg)
 		dprintf("Consumer While begin\n");
 		dprintf("Consumer waiting\n");
 		assert(read(pipe_fd2[READ], &c, 1) == 1);
-//		touch();
 		dprintf("Consumer read from pipe\n");
 		dprintf("Consume idx_arr_size = %ld\n", idx_arr_size);
 
@@ -184,11 +181,9 @@ static void *consumer(void *arg)
 		dprintf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
 		data_array[idx] = sum;
 
-		/* data_array[idx] = sum; */
 
 		dprintf("Consumer writing to pipe\n");
 		assert(write(pipe_fd1[WRITE], &c, 1) == 1);
-//		touch();
 
 	}
 
