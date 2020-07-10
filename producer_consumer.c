@@ -19,7 +19,7 @@
 
 
 #undef DEBUG
-
+#define USE_L2_L3
 #ifdef DEBUG
 #define debug_printf(fmt...)    printf(fmt)
 #else
@@ -49,6 +49,23 @@
 #endif
 #endif
 
+#if defined(__PPC__) && defined(USE_L2_L3)
+/*
+ * We will use the generic PERF_COUNT_HW_CACHE_REFERENCES for L1
+ * references on POWER and PERF_COUNT_HW_CACHE_MISSES for L1 D cache
+ * misses
+ */
+
+#define PM_LD_REF_L1		0x100fc
+#define PM_LD_MISS_L1_FIN	0x2c04e
+
+#define PM_DATA_FROM_L2		0x1c042
+#define PM_DATA_FROM_L2MISS	0x200fe
+
+#define PM_DATA_FROM_L3		0x4c042
+#define PM_DATA_FROM_L3MISS	0x300fe
+#endif
+
 static inline int sys_perf_event_open(struct perf_event_attr *attr, pid_t pid,
 				      int cpu, int group_fd,
 				      unsigned long flags)
@@ -59,6 +76,12 @@ static inline int sys_perf_event_open(struct perf_event_attr *attr, pid_t pid,
 
 static int cache_refs_fd;
 static int cache_miss_fd;
+
+static int l2_cache_hits_fd;
+static int l2_cache_miss_fd;
+
+static int l3_cache_hits_fd;
+static int l3_cache_miss_fd;
 
 static void setup_counters(void)
 {
@@ -74,6 +97,7 @@ static void setup_counters(void)
 	attr.disabled = 1;
 	attr.type = PERF_TYPE_HARDWARE;
 	attr.config = PERF_COUNT_HW_CACHE_REFERENCES;
+
 	cache_refs_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
 	if (cache_refs_fd < 0) {
 		perror("sys_perf_event_open");
@@ -88,28 +112,90 @@ static void setup_counters(void)
 	attr.disabled = 0; /* The group leader will start/stop us */
 	attr.type = PERF_TYPE_HARDWARE;
 	attr.config = PERF_COUNT_HW_CACHE_MISSES;
+
 	cache_miss_fd = sys_perf_event_open(&attr, 0, -1, cache_refs_fd, 0);
 	if (cache_miss_fd < 0) {
 		perror("sys_perf_event_open");
 		exit(1);
 	}
+#if defined(__PPC__) && defined(USE_L2_L3)
+	attr.disabled = 1;
+	attr.type = PERF_TYPE_RAW;
+	attr.config = PM_DATA_FROM_L2;
+	l2_cache_hits_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
+	if (l2_cache_hits_fd < 0) {
+		perror("sys_perf_event_open : l2_hits");
+		exit(1);
+	}
+	printf("Using PM_DATA_FROM_L2 for L2 Hits = 0x%x\n",
+	       PM_DATA_FROM_L2);
+
+	attr.disabled = 0; /* The group leader will start/stop us */
+	attr.type = PERF_TYPE_RAW;
+	attr.config = PM_DATA_FROM_L2MISS;
+	l2_cache_miss_fd = sys_perf_event_open(&attr, 0, -1, l2_cache_hits_fd, 0);
+	if (l2_cache_miss_fd < 0) {
+		perror("sys_perf_event_open : l2_miss");
+		exit(1);
+	}
+	printf("Using PM_DATA_FROM_L2MISS for L2-misses = 0x%x\n",
+	       PM_DATA_FROM_L2MISS);
+
+	attr.disabled = 1;
+	attr.type = PERF_TYPE_RAW;
+	attr.config = PM_DATA_FROM_L3;
+	l3_cache_hits_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
+	if (l3_cache_hits_fd < 0) {
+		perror("sys_perf_event_open : l3_hits");
+		exit(1);
+	}
+	printf("Using PM_DATA_FROM_L3 for L3 Hits = 0x%x\n",
+	       PM_DATA_FROM_L3);
+
+	attr.disabled = 0; /* The group leader will start/stop us */
+	attr.type = PERF_TYPE_RAW;
+	attr.config = PM_DATA_FROM_L3MISS;
+	l3_cache_miss_fd = sys_perf_event_open(&attr, 0, -1, l3_cache_hits_fd, 0);
+	if (l3_cache_miss_fd < 0) {
+		perror("sys_perf_event_open : l3_miss");
+		exit(1);
+	}
+	printf("Using PM_DATA_FROM_L3MISS for L3-misses (0x%x)\n",
+	       PM_DATA_FROM_L3MISS);
+#endif
+
 }
 
 static void start_counters(void)
 {
 	/* Only need to start and stop the group leader */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
+#if defined(__PPC__) && defined(USE_L2_L3)
+	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
+	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
+#endif
 }
 
 static void stop_counters(void)
 {
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
+#if defined(__PPC__) && defined(USE_L2_L3)
+	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
+	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
+#endif
 }
 
 static void reset_counters(void)
 {
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
 	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
+#if defined(__PPC__) && defined(USE_L2_L3)
+	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_RESET);
+	ioctl(l2_cache_miss_fd, PERF_EVENT_IOC_RESET);
+	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_RESET);
+	ioctl(l3_cache_miss_fd, PERF_EVENT_IOC_RESET);
+
+#endif
 }
 
 
@@ -125,11 +211,27 @@ unsigned long long cache_refs_total_prev;
 unsigned long long cache_miss_total;
 unsigned long long cache_miss_total_prev;
 
+unsigned long long l2_cache_hits_total;
+unsigned long long l2_cache_hits_total_prev;
+
+unsigned long long l2_cache_miss_total;
+unsigned long long l2_cache_miss_total_prev;
+
+unsigned long long l3_cache_hits_total;
+unsigned long long l3_cache_hits_total_prev;
+
+unsigned long long l3_cache_miss_total;
+unsigned long long l3_cache_miss_total_prev;
+
 static void read_counters(void)
 {
 	size_t res;
 	unsigned long long cache_refs;
 	unsigned long long cache_misses;
+	unsigned long long l2_cache_hits;
+	unsigned long long l2_cache_misses;
+	unsigned long long l3_cache_hits;
+	unsigned long long l3_cache_misses;
 
 	res = read(cache_refs_fd, &cache_refs, sizeof(unsigned long long));
 	assert(res == sizeof(unsigned long long));
@@ -139,9 +241,109 @@ static void read_counters(void)
 
 	cache_refs_total += cache_refs;
 	cache_miss_total += cache_misses;
+#if defined(__PPC__) && defined(USE_L2_L3)
+	res = read(l2_cache_hits_fd, &l2_cache_hits, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	res = read(l2_cache_miss_fd, &l2_cache_misses, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	l2_cache_hits_total += l2_cache_hits;
+	l2_cache_miss_total += l2_cache_misses;
+
+	res = read(l3_cache_hits_fd, &l3_cache_hits, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	res = read(l3_cache_miss_fd, &l3_cache_misses, sizeof(unsigned long long));
+	assert(res == sizeof(unsigned long long));
+
+	l3_cache_hits_total += l3_cache_hits;
+	l3_cache_miss_total += l3_cache_misses;
+#endif
 }
 
 static unsigned int timeout = 5;
+
+static void print_cache_details(unsigned long iter_diff)
+{
+	unsigned long long l1_refs;
+	unsigned long long l1_miss;
+	unsigned long long l2_hits;
+	unsigned long long l2_miss;
+	unsigned long long l3_hits;
+	unsigned long long l3_miss;
+
+	unsigned long long cache_refs_diff;
+	unsigned long long avg_cache_refs_diff;
+
+	unsigned long long cache_hits_diff;
+	unsigned long long avg_cache_hits_diff;
+
+	unsigned long long cache_miss_diff;
+	unsigned long long avg_cache_miss_diff;
+	float cache_miss_pct;
+
+	l1_refs = cache_refs_total;
+	l1_miss = cache_miss_total;
+#if defined(__PPC__) && defined(USE_L2_L3)
+	l2_hits = l2_cache_hits_total;
+	l2_miss = l2_cache_miss_total;
+
+	l3_hits = l3_cache_hits_total;
+	l3_miss = l3_cache_miss_total;
+#endif	
+	cache_refs_diff = l1_refs - cache_refs_total_prev;
+	avg_cache_refs_diff = cache_refs_diff/iter_diff;
+
+	cache_miss_diff = l1_miss - cache_miss_total_prev;
+	avg_cache_miss_diff = cache_miss_diff/iter_diff;
+	if (cache_refs_diff)
+		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_refs_diff);
+	else
+		cache_miss_pct = 0;
+	printf("L1: avg cache-refs: %6lld, avg cache-misses : %6lld , cache-miss rate %3.2f percentage\n",
+		avg_cache_refs_diff, avg_cache_miss_diff,
+	        cache_miss_pct);
+
+	cache_refs_total_prev = l1_refs;
+	cache_miss_total_prev = l1_miss;
+#if defined(__PPC__) && defined(USE_L2_L3)
+	cache_hits_diff = l2_hits - l2_cache_hits_total_prev;
+	avg_cache_hits_diff = cache_hits_diff/iter_diff;
+
+	cache_miss_diff = l2_miss - l2_cache_miss_total_prev;
+	avg_cache_miss_diff = cache_miss_diff/iter_diff;
+	if (cache_hits_diff + cache_miss_diff)
+		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_miss_diff + cache_hits_diff);
+	else
+		cache_miss_pct = 0;
+
+	printf("L2: avg cache-hits : %6lld, avg cache-misses : %6lld, cache-miss rate %3.2f percentage\n",
+		avg_cache_hits_diff, avg_cache_miss_diff,
+	        cache_miss_pct);
+
+	l2_cache_hits_total_prev = l2_hits;
+	l2_cache_miss_total_prev = l2_miss;
+
+	cache_hits_diff = l3_hits - l3_cache_hits_total_prev;
+	avg_cache_hits_diff = cache_hits_diff/iter_diff;
+
+	cache_miss_diff = l3_miss - l3_cache_miss_total_prev;
+	avg_cache_miss_diff = cache_miss_diff/iter_diff;
+	if (cache_hits_diff + cache_miss_diff)
+		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_miss_diff + cache_hits_diff);
+	else
+		cache_miss_pct = 0;
+
+	printf("L3: avg cache-hits : %6lld, avg cache-misses : %6lld, cache-miss rate %3.2f percentage\n",
+		avg_cache_hits_diff, avg_cache_miss_diff,
+	        cache_miss_pct);
+
+	l2_cache_hits_total_prev = l2_hits;
+	l2_cache_miss_total_prev = l2_miss;
+
+#endif
+}
 
 static void sigalrm_handler(int junk)
 {
@@ -150,22 +352,12 @@ static void sigalrm_handler(int junk)
 	unsigned long iter_diff = i - iterations_prev;
 	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
 	unsigned long long avg_time_ns = (time_ns_diff) / iter_diff;
-	unsigned long long k = cache_refs_total;
-	unsigned long long l = cache_miss_total;
-	unsigned long long cache_ref_diff = k - cache_refs_total_prev;
-	unsigned long long avg_cache_ref_diff = cache_ref_diff/iter_diff;
-	unsigned long long cache_miss_diff = l - cache_miss_total_prev;
-	unsigned long long avg_cache_miss_diff = cache_miss_diff/iter_diff;
-	float cache_miss_pct = ((float) cache_miss_diff * 100)/cache_ref_diff;
 
-	printf("%8ld iterations, avg time:%6lld ns, avg cache-ref:%6lld, avg cache-miss:%6lld (cache-miss rate %3.2f \%)\n",
-		iter_diff, avg_time_ns, avg_cache_ref_diff, avg_cache_miss_diff,
-	        cache_miss_pct);
+	printf("%8ld iterations, avg time:%6lld ns\n", iter_diff, avg_time_ns);
+	print_cache_details(iter_diff);
 
 	iterations_prev = i;
 	consumer_time_ns_prev = j;
-	cache_refs_total_prev = k;
-	cache_miss_total_prev = l;
 
 	if (--timeout == 0)
 		kill(0, SIGUSR1);
