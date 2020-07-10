@@ -121,7 +121,6 @@ static void *producer(void *arg)
 		dprintf("Producer waiting\n");
 		assert(read(pipe_fd1[READ], &c, 1) == 1);
 		dprintf("Producer read from pipe\n");
-		iterations += 2;
 	}
 
 	return NULL;
@@ -154,7 +153,7 @@ static void *consumer(void *arg)
 
 	while (1) {
 		unsigned long idx = 0;
-		unsigned int sum = 0;
+		volatile unsigned int sum = 0;
 		
 
 		dprintf("Consumer While begin\n");
@@ -173,14 +172,13 @@ static void *consumer(void *arg)
 			dprintf("Consumer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
 			sum = (sum + data) % INT_MAX;
-			
 		}
 
+		iterations++;
 
-		idx = random() % data_arr_size;
+		idx = 0;
 		dprintf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
 		data_array[idx] = sum;
-
 
 		dprintf("Consumer writing to pipe\n");
 		assert(write(pipe_fd1[WRITE], &c, 1) == 1);
