@@ -99,6 +99,7 @@ static int l2_cache_miss_fd;
 static int l3_cache_hits_fd;
 static int l3_cache_miss_fd;
 
+static int verbose = 0;
 static int setup_counter(const char *name,
 			 unsigned char disabled,
 			 unsigned int type,
@@ -133,6 +134,9 @@ static int setup_counter(const char *name,
 
 static void setup_counters(void)
 {
+	if (!verbose)
+		return;
+
 	/*
 	 * For each cache type below, we make the refs/hits fd the
 	 * group leader of the corresponding miss fd. Thus, at
@@ -171,6 +175,8 @@ static void setup_counters(void)
 
 static void start_counters(void)
 {
+	if (!verbose)
+		return;
 	/* Only need to start the group leader */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
 #if defined(USE_L2_L3)
@@ -181,6 +187,8 @@ static void start_counters(void)
 
 static void stop_counters(void)
 {
+	if (!verbose)
+		return;
 	/* Only need to stop the group leader */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
 #if defined(USE_L2_L3)
@@ -191,6 +199,10 @@ static void stop_counters(void)
 
 static void reset_counters(void)
 {
+
+	if (!verbose)
+		return;
+
 	/* Reset all counters */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
 	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
@@ -241,6 +253,9 @@ static void read_and_add_counter(unsigned int fd, unsigned long long *acc)
 
 static void read_counters(void)
 {
+
+	if (!verbose)
+		return;
 
 	read_and_add_counter(cache_refs_fd, &cache_refs_total);
 	read_and_add_counter(cache_miss_fd, &cache_miss_total);
@@ -318,6 +333,9 @@ static void print_cache_details(const char *name,
 
 static void print_caches(unsigned long iter_diff)
 {
+	if (!verbose)
+		return;
+
 	print_cache_details("L1", &cache_refs_total, &cache_miss_total,
 			&cache_refs_total_prev, &cache_miss_total_prev,
 			iter_diff, reference);
@@ -352,6 +370,7 @@ static void sigalrm_handler(int junk)
 	consumer_time_ns_prev = j;
 
 	if (--timeout == 0) {
+		stop = 1;
 		kill(0, SIGUSR1);
 		return;
 	}
@@ -514,6 +533,8 @@ static void *producer(void *arg)
 		debug_printf("Producer read from pipe\n");
 	}
 
+	/* Wakeup the consumer, just in case! */
+	assert(write(pipe_fd2[WRITE], &c, 1) == 1);
 	return NULL;
 }
 
@@ -585,6 +606,8 @@ static void *consumer(void *arg)
 		debug_printf("Consumer While begin\n");
 		debug_printf("Consumer waiting\n");
 		assert(read(pipe_fd2[READ], &c, 1) == 1);
+		if (stop)
+			break;
 		debug_printf("Consumer read from pipe\n");
 		debug_printf("Consume idx_arr_size = %ld\n", idx_arr_size);
 
@@ -628,6 +651,8 @@ update_done:
 		assert(write(pipe_fd1[WRITE], &c, 1) == 1);
 	}
 
+	/* Wakeup the producer, just in case! */
+	assert(write(pipe_fd1[WRITE], &c, 1) == 1);
 	return NULL;
 }
 
@@ -649,7 +674,8 @@ void print_usage(int argc, char *argv[])
 	printf("-r, --random-seed\t\t The seed used for random number generation\n");
 	printf("-l, --iteration-length\t\t The number of loads per consumer-iteration\n");
 	printf("-s, --cache-size\t\t Size of the cache in bytes.\n");
-	printf("-x, --timeout\t\t\t Number of seconds to run the benchmark\n");	
+	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
+	printf("    --verbose\t\t\t Also print the cache-access statistics\n");
 	printf("Note : Atmost one of --iteration-length or --cache-size can be provided\n");
 }
 
@@ -662,6 +688,7 @@ void parse_args(int argc, char *argv[])
 
 	while(1) {
 		static struct option long_options[] = {
+			{"verbose", no_argument, &verbose, 1},
 			{"pcpu", required_argument, 0, 'p'},
 			{"ccpu", required_argument, 0, 'c'},
 			{"random-seed", required_argument, 0, 'r'},
@@ -680,6 +707,15 @@ void parse_args(int argc, char *argv[])
 		if (c == -1)
 			break;
 		switch (c) {
+		case 0:
+			/* If this option set a flag, do nothing else now. */
+			if (long_options[option_index].flag != 0)
+				break;
+			printf("option %s", long_options[option_index].name);
+			if (optarg)
+				printf(" with arg %s", optarg);
+			printf("\n");
+			break;
 		case 'h':
 			print_usage(argc, argv);
 			exit(0);
@@ -757,7 +793,7 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 	if (pthread_create(&tid, attr, fn, args)) {
 		printf("Error creating the %s\n", name);
 		exit(1);
-	} else {
+	} else if (verbose) {
 		printf("%s created with tid %ld\n", name, tid);
 	}
 
@@ -776,12 +812,14 @@ int main(int argc, char *argv[])
 	if (idx_arr_size * 1024 < DATA_ARRAY_SIZE)
 		data_arr_size = idx_arr_size * 1024;
 
-	printf("seed = %ld\n", seed);
-	printf("Size of cacheline = %lu bytes\n", sizeof(struct big_data));
-	printf("Number of indices in an iteration = %d\n", idx_arr_size);
-	printf("Data array size = %d indices x %ld bytes = %ld bytes\n",
-	       data_arr_size, sizeof(struct big_data),
-	       data_arr_size * sizeof(struct big_data));
+	if (verbose) {
+		printf("seed = %ld\n", seed);
+		printf("Size of cacheline = %lu bytes\n", sizeof(struct big_data));
+		printf("Number of indices in an iteration = %d\n", idx_arr_size);
+		printf("Data array size = %d indices x %ld bytes = %ld bytes\n",
+			data_arr_size, sizeof(struct big_data),
+			data_arr_size * sizeof(struct big_data));
+	}
 
 	srandom(seed);
 
@@ -797,14 +835,17 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	printf("idx_arr = 0x%p\n", (void *)idx_arr);
+	if (verbose)
+		printf("idx_arr = 0x%p\n", (void *)idx_arr);
 
 	data_arr = malloc(data_arr_size * sizeof(struct big_data));
 	if (!data_arr) {
 		printf("Not enough memory for allocating an data array\n");
 		exit(1);
 	}
-	printf("data_arr = 0x%p\n", (void *)data_arr);
+
+	if (verbose)
+		printf("data_arr = 0x%p\n", (void *)data_arr);
 
 	setpgid(getpid(), getpid());
 	signal(SIGUSR1, sigusr1_handler);
