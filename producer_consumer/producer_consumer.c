@@ -766,8 +766,6 @@ void parse_args(int argc, char *argv[])
 
 pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void *),
 			struct data_args *args, int cpu)
-			/* unsigned long idx_arr_size, unsigned long data_arr_size, */
-			/* unsigned long *idx_arr, struct big_data *data_arr) */
 {
 	pthread_t tid;
 	cpu_set_t cpuset;
