@@ -81,9 +81,14 @@ static int l2_cache_miss_fd;
 static int l3_cache_hits_fd;
 static int l3_cache_miss_fd;
 
-static void setup_counters(void)
+static int setup_counter(const char *name,
+			 unsigned char disabled,
+			 unsigned int type,
+			 unsigned long long config,
+			 int group_fd)
 {
 	struct perf_event_attr attr;
+	int fd;
 
 	memset(&attr, 0, sizeof(attr));
 #ifdef USERSPACE_ONLY
@@ -92,72 +97,47 @@ static void setup_counters(void)
 	attr.exclude_idle = 1;
 #endif
 
-	attr.disabled = 1;
-	attr.type = PERF_TYPE_HARDWARE;
-	attr.config = PERF_COUNT_HW_CACHE_REFERENCES;
+	attr.disabled = disabled;
+	attr.type = type;
+	attr.config = config;
 
-	cache_refs_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
-	if (cache_refs_fd < 0) {
-		perror("sys_perf_event_open");
+	fd = sys_perf_event_open(&attr, 0, -1, group_fd, 0);
+	if (fd < 0) {
+		char err_str[100];
+
+		sprintf(err_str, "%s: sys_perf_event_open\n", name);
+		perror((const char *)err_str);
 		exit(1);
 	}
 
-	/*
-	 * We use cache_refs_fd as the group leader in order to ensure
-	 * both counters run at the same time and our CPI statistics are
-	 * valid.
-	 */
-	attr.disabled = 0; /* The group leader will start/stop us */
-	attr.type = PERF_TYPE_HARDWARE;
-	attr.config = PERF_COUNT_HW_CACHE_MISSES;
+	return fd;
+}
 
-	cache_miss_fd = sys_perf_event_open(&attr, 0, -1, cache_refs_fd, 0);
-	if (cache_miss_fd < 0) {
-		perror("sys_perf_event_open");
-		exit(1);
-	}
+static void setup_counters(void)
+{
+
+	cache_refs_fd = setup_counter("cache_refs", 1, PERF_TYPE_HARDWARE,
+				      PERF_COUNT_HW_CACHE_REFERENCES, -1);
+
+	cache_miss_fd = setup_counter("cache_miss", 0, PERF_TYPE_HARDWARE,
+				      PERF_COUNT_HW_CACHE_MISSES, cache_refs_fd);
 #if defined(__PPC__) && defined(USE_L2_L3)
-	attr.disabled = 1;
-	attr.type = PERF_TYPE_RAW;
-	attr.config = PM_DATA_FROM_L2;
-	l2_cache_hits_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
-	if (l2_cache_hits_fd < 0) {
-		perror("sys_perf_event_open : l2_hits");
-		exit(1);
-	}
+
+	l2_cache_hits_fd = setup_counter("l2_hits", 1, PERF_TYPE_RAW,
+					PM_DATA_FROM_L2, -1);
+	l2_cache_miss_fd = setup_counter("l2_miss", 0, PERF_TYPE_RAW,
+					PM_DATA_FROM_L2MISS, l2_cache_hits_fd);
+	l3_cache_hits_fd = setup_counter("l3_hits", 1, PERF_TYPE_RAW,
+					PM_DATA_FROM_L3, -1);
+
+	l3_cache_miss_fd = setup_counter("l3_miss", 0, PERF_TYPE_RAW,
+					PM_DATA_FROM_L3MISS, l3_cache_hits_fd);
 	printf("Using PM_DATA_FROM_L2 for L2 Hits = 0x%x\n",
 	       PM_DATA_FROM_L2);
-
-	attr.disabled = 0; /* The group leader will start/stop us */
-	attr.type = PERF_TYPE_RAW;
-	attr.config = PM_DATA_FROM_L2MISS;
-	l2_cache_miss_fd = sys_perf_event_open(&attr, 0, -1, l2_cache_hits_fd, 0);
-	if (l2_cache_miss_fd < 0) {
-		perror("sys_perf_event_open : l2_miss");
-		exit(1);
-	}
 	printf("Using PM_DATA_FROM_L2MISS for L2-misses = 0x%x\n",
 	       PM_DATA_FROM_L2MISS);
-
-	attr.disabled = 1;
-	attr.type = PERF_TYPE_RAW;
-	attr.config = PM_DATA_FROM_L3;
-	l3_cache_hits_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
-	if (l3_cache_hits_fd < 0) {
-		perror("sys_perf_event_open : l3_hits");
-		exit(1);
-	}
 	printf("Using PM_DATA_FROM_L3 for L3 Hits = 0x%x\n",
 	       PM_DATA_FROM_L3);
-
-	attr.disabled = 0; /* The group leader will start/stop us */
-	attr.type = PERF_TYPE_RAW;
-	attr.config = PM_DATA_FROM_L3MISS;
-	l3_cache_miss_fd = sys_perf_event_open(&attr, 0, -1, l3_cache_hits_fd, 0);
-	if (l3_cache_miss_fd < 0) {
-		perror("sys_perf_event_open : l3_miss");
-		exit(1);
-	}
 	printf("Using PM_DATA_FROM_L3MISS for L3-misses (0x%x)\n",
 	       PM_DATA_FROM_L3MISS);
 #endif
