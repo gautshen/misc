@@ -384,7 +384,7 @@ struct data_args {
 	struct big_data *data_array;
 };
 
-static cpuset_to_list(cpu_set_t *cpuset, char *str)
+static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 {
 	int start = -1;
 	int end = -2;
@@ -727,9 +727,9 @@ int main(int argc, char *argv[])
 		data_arr_size = idx_arr_size * 1024;
 
 	printf("seed = %ld\n", seed);
-	printf("Size of cacheline = %d bytes\n", sizeof(struct big_data));
+	printf("Size of cacheline = %lu bytes\n", sizeof(struct big_data));
 	printf("Number of indices in an iteration = %d\n", idx_arr_size);
-	printf("Data array size = %ld indices x %ld bytes = %lld bytes\n",
+	printf("Data array size = %d indices x %ld bytes = %ld bytes\n",
 	       data_arr_size, sizeof(struct big_data),
 	       data_arr_size * sizeof(struct big_data));
 
@@ -747,14 +747,14 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	printf("idx_arr = 0x%llx\n", idx_arr);
+	printf("idx_arr = 0x%p\n", (void *)idx_arr);
 
 	data_arr = malloc(data_arr_size * sizeof(struct big_data));
 	if (!data_arr) {
 		printf("Not enough memory for allocating an data array\n");
 		exit(1);
 	}
-	printf("data_arr = 0x%llx\n", data_arr);
+	printf("data_arr = 0x%p\n", (void *)data_arr);
 
 	setpgid(getpid(), getpid());
 	signal(SIGUSR1, sigusr1_handler);
