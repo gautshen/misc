@@ -1,3 +1,19 @@
+/*
+ * Cache-affinity scheduler wakeup benchmark
+ *
+ * Build with:
+ *
+ * gcc -o producer_consumer producer_consumer.c -lpthread
+ *
+ * Copyright (C) 2020 Gautham R. Shenoy <ego@linux.vnet.ibm.com>, IBM
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ */
+
+
 #define _GNU_SOURCE
 #include <sched.h>
 #include <string.h>
@@ -20,7 +36,8 @@
 
 
 #undef DEBUG
-#define USE_L2_L3
+#undef USE_L2_L3
+
 #ifdef DEBUG
 #define debug_printf(fmt...)    printf(fmt)
 #else
@@ -47,7 +64,8 @@
 #endif
 #endif
 
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(__PPC__)
+#define USE_L2_L3
 /*
  * We will use the generic PERF_COUNT_HW_CACHE_REFERENCES for L1
  * references on POWER and PERF_COUNT_HW_CACHE_MISSES for L1 D cache
@@ -115,13 +133,20 @@ static int setup_counter(const char *name,
 
 static void setup_counters(void)
 {
-
+	/*
+	 * For each cache type below, we make the refs/hits fd the
+	 * group leader of the corresponding miss fd. Thus, at
+	 * runtime, sufficient to enable the group leader. The others
+	 * will automatically get enabled.
+	 *
+	 * During initialization, we keep the group leader disabled.
+	 */
 	cache_refs_fd = setup_counter("cache_refs", 1, PERF_TYPE_HARDWARE,
 				      PERF_COUNT_HW_CACHE_REFERENCES, -1);
 
 	cache_miss_fd = setup_counter("cache_miss", 0, PERF_TYPE_HARDWARE,
 				      PERF_COUNT_HW_CACHE_MISSES, cache_refs_fd);
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 
 	l2_cache_hits_fd = setup_counter("l2_hits", 1, PERF_TYPE_RAW,
 					PM_DATA_FROM_L2, -1);
@@ -146,9 +171,9 @@ static void setup_counters(void)
 
 static void start_counters(void)
 {
-	/* Only need to start and stop the group leader */
+	/* Only need to start the group leader */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
 #endif
@@ -156,8 +181,9 @@ static void start_counters(void)
 
 static void stop_counters(void)
 {
+	/* Only need to stop the group leader */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
 #endif
@@ -165,9 +191,10 @@ static void stop_counters(void)
 
 static void reset_counters(void)
 {
+	/* Reset all counters */
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
 	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_RESET);
 	ioctl(l2_cache_miss_fd, PERF_EVENT_IOC_RESET);
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_RESET);
@@ -218,7 +245,7 @@ static void read_counters(void)
 	read_and_add_counter(cache_refs_fd, &cache_refs_total);
 	read_and_add_counter(cache_miss_fd, &cache_miss_total);
 
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 	read_and_add_counter(l2_cache_hits_fd, &l2_cache_hits_total);
 	read_and_add_counter(l2_cache_miss_fd, &l2_cache_miss_total);
 
@@ -294,7 +321,7 @@ static void print_caches(unsigned long iter_diff)
 	print_cache_details("L1", &cache_refs_total, &cache_miss_total,
 			&cache_refs_total_prev, &cache_miss_total_prev,
 			iter_diff, reference);
-#if defined(__PPC__) && defined(USE_L2_L3)
+#if defined(USE_L2_L3)
 	print_cache_details("L2", &l2_cache_hits_total, &l2_cache_miss_total,
 			&l2_cache_hits_total_prev, &l2_cache_miss_total_prev,
 			iter_diff, hit);
@@ -306,6 +333,7 @@ static void print_caches(unsigned long iter_diff)
 
 unsigned char stop = 0;
 
+/* We print the statistics of this last second here */
 static void sigalrm_handler(int junk)
 {
 	unsigned long i = iterations;
@@ -384,6 +412,11 @@ struct data_args {
 	struct big_data *data_array;
 };
 
+/*
+ * Helper function to pretty-print cpuset into list for easy viewing.
+ *
+ * WARNING: Hasn't been extensively tested.
+ */
 static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 {
 	int start = -1;
@@ -421,6 +454,11 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 	}
 }
 
+/*
+ * Producer function : Performs idx_arr_size number of stores to
+ * random locations in the data_array.  These locations are recorded
+ * in index_array for the consumer to later access.
+ */
 static void *producer(void *arg)
 {
 	int i;
@@ -438,7 +476,6 @@ static void *producer(void *arg)
 
 	cpuset_to_list(&cpuset, cpu_list_str);
 	printf("Producer affined to CPUs: %s\n", cpu_list_str);
-
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
@@ -480,6 +517,13 @@ static void *producer(void *arg)
 	return NULL;
 }
 
+/*
+ * Helper function to compute the difference between two timespec
+ * structures.  The return value is in nanoseconds.
+ *
+ * WARNING : Have occassionally seen incorrect values when
+ * after.tv_sec > before.tv_sec.
+ */
 static unsigned long long compute_timediff(struct timespec before, struct timespec after)
 {
 	unsigned long long ret_ns;
@@ -502,7 +546,11 @@ static unsigned long long compute_timediff(struct timespec before, struct timesp
 	return 0;
 }
 
-
+/*
+ * Consumer function : Performs idx_arr_size number of loads from the
+ * locations in data_array. These were the ones that producer had
+ * written to and are obtained from index_array.
+ */
 static void *consumer(void *arg)
 {
 	int i;
@@ -557,6 +605,8 @@ static void *consumer(void *arg)
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end);
 
 		time_diff_ns = compute_timediff(begin, end);
+
+		/* Iteration shouldn't take more than a milli-second */
 		if (time_diff_ns > ns_per_msec) {
 			debug_printf("========= WARNING !!!! ===================\n");
 			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, end.tv_nsec);
