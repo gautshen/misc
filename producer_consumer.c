@@ -421,6 +421,43 @@ struct data_args {
 	struct big_data *data_array;
 };
 
+static cpuset_to_list(cpu_set_t *cpuset, char *str)
+{
+	int start = -1;
+	int end = -2;
+	int cur, i;
+
+	for (i = 0; i < CPU_SETSIZE; i++) {
+		cur = i;
+		if (CPU_ISSET(i, cpuset)) {
+			if (end != cur - 1) /* New streak */
+				start = cur;
+			end = cur;
+		} else if (end == cur - 1) {
+			int len;
+			/* Streak has ended. Print the last streak */
+			if (start == end)
+				len = sprintf(str, "%d,", start);
+			else
+				len = sprintf(str, "%d-%d,", start, end);
+
+			str = str + len;
+		}
+
+	}
+
+	if (end == CPU_SETSIZE - 1) {
+		int len;
+		/* Streak has ended. Print the last streak */
+		if (start == end)
+			len = sprintf(str, "%d,", start);
+		else
+			len = sprintf(str, "%d-%d,", start, end);
+
+		str = str + len;
+	}
+}
+
 static void *producer(void *arg)
 {
 	int i;
@@ -431,14 +468,14 @@ static void *producer(void *arg)
 	struct big_data *data_array = p->data_array;
 	pthread_t thread = pthread_self();
         cpu_set_t cpuset;
+	char cpu_list_str[1024];
 
 	CPU_ZERO(&cpuset);
 	pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
 
-	for ( i = 0; i < CPU_SETSIZE; i++) {
-		if (CPU_ISSET(i, &cpuset)) 
-			printf("Producer affined to  CPU %d\n", i);
-	}
+	cpuset_to_list(&cpuset, cpu_list_str);
+	printf("Producer affined to CPUs: %s\n", cpu_list_str);
+
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
@@ -502,6 +539,7 @@ static unsigned long long compute_timediff(struct timespec before, struct timesp
 	return 0;
 }
 
+
 static void *consumer(void *arg)
 {
 	int i;
@@ -512,15 +550,13 @@ static void *consumer(void *arg)
 	struct big_data *data_array = con->data_array;
 	pthread_t thread = pthread_self();
         cpu_set_t cpuset;
+	char cpu_list_str[1024];
 
 	CPU_ZERO(&cpuset);
 	pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
 
-
-	for (i = 0; i < CPU_SETSIZE; i++) {
-		if (CPU_ISSET(i, &cpuset)) 
-			printf("Consumer affined to  CPU %d\n", i);
-	}
+	cpuset_to_list(&cpuset, cpu_list_str);
+	printf("Consumer affined to CPUs: %s\n", cpu_list_str);
 
 	debug_printf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
