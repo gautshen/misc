@@ -221,42 +221,29 @@ unsigned long long l3_cache_hits_total_prev;
 unsigned long long l3_cache_miss_total;
 unsigned long long l3_cache_miss_total_prev;
 
-static void read_counters(void)
+static void read_and_add_counter(unsigned int fd, unsigned long long *acc)
 {
 	size_t res;
-	unsigned long long cache_refs;
-	unsigned long long cache_misses;
-	unsigned long long l2_cache_hits;
-	unsigned long long l2_cache_misses;
-	unsigned long long l3_cache_hits;
-	unsigned long long l3_cache_misses;
+	unsigned long long counter;
 
-	res = read(cache_refs_fd, &cache_refs, sizeof(unsigned long long));
+	res = read(fd,&counter, sizeof(unsigned long long));
 	assert(res == sizeof(unsigned long long));
 
-	res = read(cache_miss_fd, &cache_misses, sizeof(unsigned long long));
-	assert(res == sizeof(unsigned long long));
+	*acc += counter;
+}
 
-	cache_refs_total += cache_refs;
-	cache_miss_total += cache_misses;
+static void read_counters(void)
+{
+
+	read_and_add_counter(cache_refs_fd, &cache_refs_total);
+	read_and_add_counter(cache_miss_fd, &cache_miss_total);
+
 #if defined(__PPC__) && defined(USE_L2_L3)
-	res = read(l2_cache_hits_fd, &l2_cache_hits, sizeof(unsigned long long));
-	assert(res == sizeof(unsigned long long));
+	read_and_add_counter(l2_cache_hits_fd, &l2_cache_hits_total);
+	read_and_add_counter(l2_cache_miss_fd, &l2_cache_miss_total);
 
-	res = read(l2_cache_miss_fd, &l2_cache_misses, sizeof(unsigned long long));
-	assert(res == sizeof(unsigned long long));
-
-	l2_cache_hits_total += l2_cache_hits;
-	l2_cache_miss_total += l2_cache_misses;
-
-	res = read(l3_cache_hits_fd, &l3_cache_hits, sizeof(unsigned long long));
-	assert(res == sizeof(unsigned long long));
-
-	res = read(l3_cache_miss_fd, &l3_cache_misses, sizeof(unsigned long long));
-	assert(res == sizeof(unsigned long long));
-
-	l3_cache_hits_total += l3_cache_hits;
-	l3_cache_miss_total += l3_cache_misses;
+	read_and_add_counter(l3_cache_hits_fd, &l3_cache_hits_total);
+	read_and_add_counter(l3_cache_miss_fd, &l3_cache_miss_total);
 #endif
 }
 
