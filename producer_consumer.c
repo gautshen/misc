@@ -249,84 +249,78 @@ static void read_counters(void)
 
 static unsigned int timeout = 5;
 
-static void print_cache_details(unsigned long iter_diff)
+enum access_type{
+	reference,
+	hit,
+	miss,
+};
+
+static void print_cache_details(const char *name,
+				unsigned long long *hit_ref,
+				unsigned long long *miss,
+				unsigned long long *hit_ref_prev,
+				unsigned long long *miss_prev,
+				unsigned long iter_diff,
+				enum access_type type)
 {
-	unsigned long long l1_refs;
-	unsigned long long l1_miss;
-	unsigned long long l2_hits;
-	unsigned long long l2_miss;
-	unsigned long long l3_hits;
-	unsigned long long l3_miss;
+	unsigned long cur_hit_ref = *hit_ref;
+	unsigned long cur_miss = *miss;
+	unsigned long hit_ref_diff = cur_hit_ref - *hit_ref_prev;
+	unsigned long miss_diff = cur_miss - *miss_prev;
+	float cache_miss_pct = 0;
+	unsigned long long avg_hit_ref_diff = 0, avg_miss_diff = 0;
+	unsigned long long pct_denominator;
+	char *ref_hit_str = "unknown";
 
-	unsigned long long cache_refs_diff;
-	unsigned long long avg_cache_refs_diff;
+	/*
+	 * Compute the average number of hits/references and misses
+	 * per consumer iteration in this last second.
+	 */
+	if (iter_diff) {
+		avg_hit_ref_diff = hit_ref_diff/iter_diff;
+		avg_miss_diff = miss_diff/iter_diff;
+	}
 
-	unsigned long long cache_hits_diff;
-	unsigned long long avg_cache_hits_diff;
+	/*
+	 * Compute the denominator for determining the cache miss
+	 * rate, based on whether the hit_ref data is either a
+	 * reference or a hit.
+	 */
+	if (type == reference) {
+		pct_denominator = hit_ref_diff;
+		ref_hit_str = "refs";
+	} else if (type == hit) {
+		pct_denominator = hit_ref_diff + miss_diff;
+		ref_hit_str = "hits";
+	}
 
-	unsigned long long cache_miss_diff;
-	unsigned long long avg_cache_miss_diff;
-	float cache_miss_pct;
+	/* Compute the percentage cache-miss */
+	if (pct_denominator)
+		cache_miss_pct = ((float)miss_diff * 100)/pct_denominator;
 
-	l1_refs = cache_refs_total;
-	l1_miss = cache_miss_total;
+	printf("%s: avg cache-%s: %6lld, avg cache-misses: %6lld, cache-miss rate: %3.2f percentage\n", name, ref_hit_str, avg_hit_ref_diff,
+		avg_miss_diff, cache_miss_pct);
+
+	/*
+	 * Record the current snapshots of both hits/references and
+	 * misses.
+	 */
+	*hit_ref_prev = cur_hit_ref;
+	*miss_prev = cur_miss;
+}
+
+static void print_caches(unsigned long iter_diff)
+{
+	print_cache_details("L1", &cache_refs_total, &cache_miss_total,
+			&cache_refs_total_prev, &cache_miss_total_prev,
+			iter_diff, reference);
 #if defined(__PPC__) && defined(USE_L2_L3)
-	l2_hits = l2_cache_hits_total;
-	l2_miss = l2_cache_miss_total;
-
-	l3_hits = l3_cache_hits_total;
-	l3_miss = l3_cache_miss_total;
-#endif	
-	cache_refs_diff = l1_refs - cache_refs_total_prev;
-	avg_cache_refs_diff = cache_refs_diff/iter_diff;
-
-	cache_miss_diff = l1_miss - cache_miss_total_prev;
-	avg_cache_miss_diff = cache_miss_diff/iter_diff;
-	if (cache_refs_diff)
-		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_refs_diff);
-	else
-		cache_miss_pct = 0;
-	printf("L1: avg cache-refs: %6lld, avg cache-misses : %6lld , cache-miss rate %3.2f percentage\n",
-		avg_cache_refs_diff, avg_cache_miss_diff,
-	        cache_miss_pct);
-
-	cache_refs_total_prev = l1_refs;
-	cache_miss_total_prev = l1_miss;
-#if defined(__PPC__) && defined(USE_L2_L3)
-	cache_hits_diff = l2_hits - l2_cache_hits_total_prev;
-	avg_cache_hits_diff = cache_hits_diff/iter_diff;
-
-	cache_miss_diff = l2_miss - l2_cache_miss_total_prev;
-	avg_cache_miss_diff = cache_miss_diff/iter_diff;
-	if (cache_hits_diff + cache_miss_diff)
-		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_miss_diff + cache_hits_diff);
-	else
-		cache_miss_pct = 0;
-
-	printf("L2: avg cache-hits : %6lld, avg cache-misses : %6lld, cache-miss rate %3.2f percentage\n",
-		avg_cache_hits_diff, avg_cache_miss_diff,
-	        cache_miss_pct);
-
-	l2_cache_hits_total_prev = l2_hits;
-	l2_cache_miss_total_prev = l2_miss;
-
-	cache_hits_diff = l3_hits - l3_cache_hits_total_prev;
-	avg_cache_hits_diff = cache_hits_diff/iter_diff;
-
-	cache_miss_diff = l3_miss - l3_cache_miss_total_prev;
-	avg_cache_miss_diff = cache_miss_diff/iter_diff;
-	if (cache_hits_diff + cache_miss_diff)
-		cache_miss_pct = ((float) cache_miss_diff * 100)/(cache_miss_diff + cache_hits_diff);
-	else
-		cache_miss_pct = 0;
-
-	printf("L3: avg cache-hits : %6lld, avg cache-misses : %6lld, cache-miss rate %3.2f percentage\n",
-		avg_cache_hits_diff, avg_cache_miss_diff,
-	        cache_miss_pct);
-
-	l2_cache_hits_total_prev = l2_hits;
-	l2_cache_miss_total_prev = l2_miss;
-
+	print_cache_details("L2", &l2_cache_hits_total, &l2_cache_miss_total,
+			&l2_cache_hits_total_prev, &l2_cache_miss_total_prev,
+			iter_diff, hit);
+	print_cache_details("L3", &l3_cache_hits_total, &l3_cache_miss_total,
+			&l3_cache_hits_total_prev, &l3_cache_miss_total_prev,
+			iter_diff, hit);
 #endif
 }
 
@@ -344,13 +338,15 @@ static void sigalrm_handler(int junk)
 		avg_time_ns = (time_ns_diff) / iter_diff;
 
 	printf("%8ld iterations, avg time:%6lld ns\n", iter_diff, avg_time_ns);
-	print_cache_details(iter_diff);
+	print_caches(iter_diff);
 
 	iterations_prev = i;
 	consumer_time_ns_prev = j;
 
-	if (--timeout == 0)
+	if (--timeout == 0) {
 		kill(0, SIGUSR1);
+		return;
+	}
 
 	alarm(1);
 }
