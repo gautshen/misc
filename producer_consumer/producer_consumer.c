@@ -371,16 +371,10 @@ static void sigalrm_handler(int junk)
 
 	if (--timeout == 0) {
 		stop = 1;
-		kill(0, SIGUSR1);
 		return;
 	}
 
 	alarm(1);
-}
-
-static void sigusr1_handler(int junk)
-{
-	stop = 1;
 }
 
 #undef L1_CONTAINED
@@ -846,7 +840,6 @@ int main(int argc, char *argv[])
 		printf("data_arr = 0x%p\n", (void *)data_arr);
 
 	setpgid(getpid(), getpid());
-	signal(SIGUSR1, sigusr1_handler);
 
 	producer_tid = create_thread("producer", &producer_attr,
 				     producer, &producer_args, cpu_producer);
