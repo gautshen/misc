@@ -41,14 +41,14 @@ $./idle_ipi_scheduler_latency.sh -a 4 -t 15 -l /tmp/logs; ./postprocess_data.sh 
 ==========================================
 Tests are done. The logs are in /tmp/logs
 ==========================================
-<= 1 pct difference : 35 instances
-(1 - 2] pct difference : 4 instances
-(2 - 3] pct difference : 0 instances
-(3 - 5] pct difference : 1 instances
-(5 - 10] pct difference : 0 instances
-(10 - 20] pct difference : 0 instances
-(20 - 50] pct difference : 0 instances
-(50 - 100] pct difference : 0 instances
+<= 1 %age regression : 35 instances
+(1 - 2] %age regression : 4 instances
+(2 - 3] %age regression : 0 instances
+(3 - 5] %age regression : 1 instances
+(5 - 10] %age regression : 0 instances
+(10 - 20] %age regression : 0 instances
+(20 - 50] %age regression : 0 instances
+(50 - 100] %age regression : 0 instances
 =====================================================
 More details can be found in the summary directory
 =====================================================

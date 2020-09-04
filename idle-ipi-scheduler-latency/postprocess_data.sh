@@ -191,11 +191,11 @@ do
     SUM=`expr $SUM + $COUNT`
     if [ $i -eq $first ]
     then
-	echo "<= $fit pct difference : $COUNT instances" | tee -a $OUTPUTDIR/distribution.txt
+	echo "<= $fit %age regression : $COUNT instances" | tee -a $OUTPUTDIR/distribution.txt
     else
 	j=`expr $i - 1`
 	prevfit=${pct_regression[$j]}
-	echo "($prevfit - $fit] pct difference : $COUNT instances" | tee -a $OUTPUTDIR/distribution.txt
+	echo "($prevfit - $fit] %age regression : $COUNT instances" | tee -a $OUTPUTDIR/distribution.txt
     fi
 done
 
