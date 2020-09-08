@@ -653,7 +653,8 @@ update_done:
 
 int idx_arr_size = INDEX_ARRAY_SIZE;
 int data_arr_size =  DATA_ARRAY_SIZE;
-int cpu_producer = -1, cpu_consumer = -1;
+int *cpu_producer, *cpu_consumer;
+int producer_count = 0, consumer_count = 0;
 unsigned long seed = 6407741;
 unsigned long cache_size = CACHE_SIZE;
 unsigned long *idx_arr;
@@ -676,6 +677,8 @@ void print_usage(int argc, char *argv[])
 void parse_args(int argc, char *argv[])
 {
 	int c;
+	char *arg;
+	int temp, ind;
 
 	int iteration_length_provided = 0;
 	int cache_size_provided = 0;
@@ -715,11 +718,77 @@ void parse_args(int argc, char *argv[])
 			exit(0);
 
 		case 'p':
-			cpu_producer = (int) strtoul(optarg, NULL, 10);
+			ind = 0;
+			arg = optarg;
+			cpu_producer = malloc(sizeof(int) * 1000);
+
+			if (strchr(arg, ',') == NULL) {
+				if (strchr(arg, '-') != NULL) {
+					char *token = strtok(arg, "-");
+					cpu_producer[ind++] = strtoul(token, NULL, 10);
+					token = strtok(NULL, "");
+					temp = strtoul(token, NULL, 10);
+					for (int i = cpu_producer[ind-1]; i < temp; i++)
+						cpu_producer[ind++] = i + 1;
+				} else {
+					cpu_producer[ind++] = strtoul(arg, NULL, 10);
+				}
+			} else {
+				char *sep;
+				char *token = strtok_r(arg, ",", &sep);
+				while (token != NULL) {
+					if (strchr(token, '-') != NULL) {
+						char *sep2;
+						char *token2 = strtok_r(token, "-", &sep2);
+						cpu_producer[ind++] = strtoul(token2, NULL, 10);
+						token2 = strtok_r(NULL, "", &sep2);
+						temp = strtoul(token2, NULL, 10);
+						for (int i = cpu_producer[ind-1]; i < temp; i++)
+							cpu_producer[ind++] = cpu_producer[ind-1] + 1;
+					} else {
+						cpu_producer[ind++] = strtoul(token, NULL, 10);
+					}
+				token = strtok_r(NULL, ",", &sep);
+				}
+			}
+			producer_count = ind;
 			break;
 
 		case 'c':
-			cpu_consumer = (int) strtoul(optarg, NULL, 10);
+			ind = 0;
+			arg = optarg;
+			cpu_consumer = malloc(sizeof(int) * 1000);
+
+			if (strchr(arg, ',') == NULL) {
+				if (strchr(arg, '-') != NULL) {
+					char *token = strtok(arg, "-");
+					cpu_consumer[ind++] = (int) atoi(token);
+					token = strtok(NULL, "");
+					temp = strtoul(token, NULL, 10);
+					for (int i = cpu_consumer[ind-1]; i < temp; i++)
+						cpu_consumer[ind++] = cpu_consumer[ind-1] + 1;
+				} else {
+					cpu_consumer[ind++] = (int) atoi(arg);
+				}
+			} else {
+				char *sep;
+				char *token = strtok_r(arg, ",", &sep);
+				while (token != NULL) {
+					if (strchr(token, '-') != NULL) {
+						char *sep2;
+						char *token2 = strtok_r(token, "-", &sep2);
+						cpu_consumer[ind++] = (int) atoi(token2);
+						token2 = strtok_r(NULL, "", &sep2);
+						temp = strtoul(token2, NULL, 10);
+						for (int i = cpu_consumer[ind-1]; i < temp; i++)
+							cpu_consumer[ind++] = cpu_consumer[ind-1] + 1;
+					} else {
+						cpu_consumer[ind++] = (int) atoi(token);
+					}
+				token = strtok_r(NULL, ",", &sep);
+				}
+			}
+			consumer_count = ind;
 			break;
 
 		case 'r':
@@ -794,12 +863,23 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 
 int main(int argc, char *argv[])
 {
+	int i;
 	signed char c;
-	pthread_t producer_tid, consumer_tid;	
-	pthread_attr_t producer_attr, consumer_attr;
-	struct data_args producer_args, consumer_args;
+	pthread_t *producer_tid, *consumer_tid;
+	pthread_t producer_tid_base, consumer_tid_base;
+	pthread_attr_t *producer_attr, *consumer_attr;
+	pthread_attr_t producer_attr_base, consumer_attr_base;
+	struct data_args *producer_args, *consumer_args;
+	struct data_args producer_args_base, consumer_args_base;
 
 	parse_args(argc, argv);
+
+	producer_tid = malloc(sizeof(pthread_t) * producer_count);
+	consumer_tid = malloc(sizeof(pthread_t) * consumer_count);
+	producer_attr = malloc(sizeof(pthread_attr_t) * producer_count);
+	consumer_attr = malloc(sizeof(pthread_attr_t) * consumer_count);
+	producer_args = malloc(sizeof(struct data_args) * producer_count);
+	consumer_args = malloc(sizeof(struct data_args) * consumer_count);
 
 	if (idx_arr_size * 1024 < DATA_ARRAY_SIZE)
 		data_arr_size = idx_arr_size * 1024;
@@ -841,17 +921,39 @@ int main(int argc, char *argv[])
 
 	setpgid(getpid(), getpid());
 
-	producer_tid = create_thread("producer", &producer_attr,
-				     producer, &producer_args, cpu_producer);
+	if (producer_count == 0)
+		producer_tid_base = create_thread("producer", &producer_attr_base,
+						producer, &producer_args_base, -1);
 
-	consumer_tid = create_thread("consumer", &consumer_attr,
-				     consumer, &consumer_args, cpu_consumer);
+	for (i = 0; i < producer_count; i++)
+		producer_tid[i] = create_thread("producer", &producer_attr[i],
+					producer, &producer_args[i], cpu_producer[i]);
 
-	pthread_join(producer_tid, NULL);
-	pthread_join(consumer_tid, NULL);
+	if (consumer_count == 0)
+		consumer_tid_base = create_thread("consumer", &consumer_attr_base,
+					consumer, &consumer_args_base, -1);
 
-	pthread_attr_destroy(&producer_attr);
-	pthread_attr_destroy(&consumer_attr);
+	for (i = 0; i < consumer_count; i++)
+		consumer_tid[i] = create_thread("consumer", &consumer_attr[i],
+					consumer, &consumer_args[i], cpu_consumer[i]);
+
+	for (i = 0; i < producer_count; i++)
+		pthread_join(producer_tid[i], NULL);
+	if (producer_count == 0)
+		pthread_join(producer_tid_base, NULL);
+	for (i = 0; i < consumer_count; i++)
+		pthread_join(consumer_tid[i], NULL);
+	if (consumer_count == 0)
+		pthread_join(consumer_tid_base, NULL);
+
+	for (i = 0; i < producer_count; i++)
+		pthread_attr_destroy(&producer_attr[i]);
+	if (producer_count == 0)
+		pthread_attr_destroy(&producer_attr_base);
+	for (i = 0; i < consumer_count; i++)
+		pthread_attr_destroy(&consumer_attr[i]);
+	if (consumer_count == 0)
+		pthread_attr_destroy(&consumer_attr_base);
 	free(idx_arr);
 	free(data_arr);
 
