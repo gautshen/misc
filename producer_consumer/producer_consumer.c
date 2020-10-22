@@ -435,8 +435,9 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 	int start = -1;
 	int end = -2;
 	int cur, i;
+	int max_cpus = 2048;
 
-	for (i = 0; i < CPU_SETSIZE; i++) {
+	for (i = 0; i < max_cpus; i++) {
 		cur = i;
 		if (CPU_ISSET(i, cpuset)) {
 			if (end != cur - 1) /* New streak */
@@ -481,13 +482,24 @@ static void *producer(void *arg)
 	unsigned long *index_array = p->index_array;
 	struct big_data *data_array = p->data_array;
 	pthread_t thread = pthread_self();
-        cpu_set_t cpuset;
-	char cpu_list_str[1024];
+        cpu_set_t *cpuset;
+	size_t size;
+	static int max_cpus = 2048;
 
-	CPU_ZERO(&cpuset);
-	pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+	char cpu_list_str[2048];
 
-	cpuset_to_list(&cpuset, cpu_list_str);
+	cpuset = CPU_ALLOC(max_cpus);
+	if (cpuset == NULL) {
+		printf("Unable to allocate cpuset\n");
+		exit(1);
+	}
+
+	size = CPU_ALLOC_SIZE(max_cpus);
+	CPU_ZERO_S(size, cpuset);
+
+	pthread_getaffinity_np(thread, size, cpuset);
+
+	cpuset_to_list(cpuset, cpu_list_str);
 	printf("Producer affined to CPUs: %s\n", cpu_list_str);
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
@@ -529,6 +541,7 @@ static void *producer(void *arg)
 
 	/* Wakeup the consumer, just in case! */
 	assert(write(pipe_fd2[WRITE], &c, 1) == 1);
+	CPU_FREE(cpuset);
 	return NULL;
 }
 
@@ -575,13 +588,24 @@ static void *consumer(void *arg)
 	unsigned long *index_array = con->index_array;
 	struct big_data *data_array = con->data_array;
 	pthread_t thread = pthread_self();
-        cpu_set_t cpuset;
-	char cpu_list_str[1024];
+        cpu_set_t *cpuset;
+	size_t size;
+	static int max_cpus = 2048;
 
-	CPU_ZERO(&cpuset);
-	pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+	char cpu_list_str[2048];
 
-	cpuset_to_list(&cpuset, cpu_list_str);
+	cpuset = CPU_ALLOC(max_cpus);
+	if (cpuset == NULL) {
+		printf("Unable to allocate cpuset\n");
+		exit(1);
+	}
+
+	size = CPU_ALLOC_SIZE(max_cpus);
+	CPU_ZERO_S(size, cpuset);
+
+	pthread_getaffinity_np(thread, size, cpuset);
+
+	cpuset_to_list(cpuset, cpu_list_str);
 	printf("Consumer affined to CPUs: %s\n", cpu_list_str);
 
 	debug_printf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
@@ -647,6 +671,7 @@ update_done:
 
 	/* Wakeup the producer, just in case! */
 	assert(write(pipe_fd1[WRITE], &c, 1) == 1);
+	CPU_FREE(cpuset);
 	return NULL;
 }
 
@@ -762,7 +787,9 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 			struct data_args *args, int cpu)
 {
 	pthread_t tid;
-	cpu_set_t cpuset;
+	cpu_set_t *cpuset;
+	size_t size;
+	static int max_cpus = 2048;
 
         args->idx_arr_size = idx_arr_size;
 	args->index_array = idx_arr;
@@ -772,11 +799,18 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 
 	pthread_attr_init(attr);
 	if (cpu != -1) {
-		CPU_ZERO(&cpuset);
-		CPU_SET(cpu, &cpuset);
+		cpuset = CPU_ALLOC(max_cpus);
+		if (cpuset == NULL) {
+			printf("Unable to allocate cpuset\n");
+			exit(1);
+		}
+
+		size = CPU_ALLOC_SIZE(max_cpus);
+		CPU_ZERO_S(size, cpuset);
+		CPU_SET_S(cpu, size, cpuset);
 		if (pthread_attr_setaffinity_np(attr,
-						sizeof(cpu_set_t),
-						&cpuset)) {
+						size,
+						cpuset)) {
 			perror("Error setting affinity for producer");
 			exit(1);
 		}
@@ -789,6 +823,7 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 		printf("%s created with tid %ld\n", name, tid);
 	}
 
+	CPU_FREE(cpuset);
 	return tid;
 }
 

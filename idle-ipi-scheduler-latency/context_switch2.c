@@ -30,6 +30,8 @@
 #include <sys/shm.h>
 #include <linux/futex.h>
 
+#define NUM_CPUS 4096
+
 static unsigned int timeout = INT_MAX;
 
 static int touch_vdso;
@@ -73,15 +75,24 @@ static void touch(void)
 static void start_thread_on(void *(*fn)(void *), void *arg, unsigned long cpu)
 {
 	pthread_t tid;
-	cpu_set_t cpuset;
+	cpu_set_t *cpuset;
 	pthread_attr_t attr;
+	size_t size;
 
-	CPU_ZERO(&cpuset);
-	CPU_SET(cpu, &cpuset);
+	cpuset  = CPU_ALLOC(NUM_CPUS);
+	if (!cpuset) {
+		perror("cpuset allocation");
+		exit(1);
+	}
+
+	size = CPU_ALLOC_SIZE(NUM_CPUS);
+
+	CPU_ZERO_S(size, cpuset);
+	CPU_SET_S(cpu, size, cpuset);
 
 	pthread_attr_init(&attr);
 
-	if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset)) {
+	if (pthread_attr_setaffinity_np(&attr, size, cpuset)) {
 		perror("pthread_attr_setaffinity_np");
 		exit(1);
 	}
@@ -90,13 +101,16 @@ static void start_thread_on(void *(*fn)(void *), void *arg, unsigned long cpu)
 		perror("pthread_create");
 		exit(1);
 	}
+
+	CPU_FREE(cpuset);
 }
 
 static void start_process_on(void *(*fn)(void *), void *arg, unsigned long cpu)
 {
 	int pid;
-	cpu_set_t cpuset;
-
+	cpu_set_t *cpuset;
+	size_t size;
+	
 	pid = fork();
 	if (pid == -1) {
 		perror("fork");
@@ -106,14 +120,22 @@ static void start_process_on(void *(*fn)(void *), void *arg, unsigned long cpu)
 	if (pid)
 		return;
 
-	CPU_ZERO(&cpuset);
-	CPU_SET(cpu, &cpuset);
-
-	if (sched_setaffinity(0, sizeof(cpuset), &cpuset)) {
-		perror("sched_setaffinity");
+	cpuset  = CPU_ALLOC(NUM_CPUS);
+	if (!cpuset) {
+		perror("cpuset allocation");
 		exit(1);
 	}
 
+	size = CPU_ALLOC_SIZE(NUM_CPUS);
+
+	CPU_ZERO_S(size, cpuset);
+	CPU_SET_S(cpu, size, cpuset);
+
+	if (sched_setaffinity(0, size, cpuset)) {
+		perror("sched_setaffinity");
+		exit(1);
+	}
+	CPU_FREE(cpuset);
 	fn(arg);
 
 	exit(0);
