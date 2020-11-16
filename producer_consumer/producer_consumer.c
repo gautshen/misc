@@ -351,31 +351,6 @@ static void print_caches(unsigned long iter_diff)
 
 unsigned char stop = 0;
 
-/* We print the statistics of this last second here */
-static void sigalrm_handler(int junk)
-{
-	unsigned long i = iterations;
-	unsigned long long j = consumer_time_ns;
-	unsigned long iter_diff = i - iterations_prev;
-	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
-	unsigned long long avg_time_ns = 0;
-
-	if (iter_diff)
-		avg_time_ns = (time_ns_diff) / iter_diff;
-
-	printf("%8ld iterations, avg time:%6lld ns\n", iter_diff, avg_time_ns);
-	print_caches(iter_diff);
-
-	iterations_prev = i;
-	consumer_time_ns_prev = j;
-
-	if (--timeout == 0) {
-		stop = 1;
-		return;
-	}
-
-	alarm(1);
-}
 
 #undef L1_CONTAINED
 
@@ -424,6 +399,39 @@ struct data_args {
 	unsigned long *index_array;
 	struct big_data *data_array;
 };
+
+int idx_arr_size = INDEX_ARRAY_SIZE;
+int data_arr_size =  DATA_ARRAY_SIZE;
+
+/* We print the statistics of this last second here */
+static void sigalrm_handler(int junk)
+{
+	unsigned long i = iterations;
+	unsigned long long j = consumer_time_ns;
+	unsigned long iter_diff = i - iterations_prev;
+	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
+	unsigned long long avg_time_ns = 0;
+	unsigned long long avg_access_time_ns = 0;
+
+	if (iter_diff)
+		avg_time_ns = (time_ns_diff) / iter_diff;
+
+	avg_access_time_ns = avg_time_ns/idx_arr_size;
+
+	printf("%8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
+	       iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
+	print_caches(iter_diff);
+
+	iterations_prev = i;
+	consumer_time_ns_prev = j;
+
+	if (--timeout == 0) {
+		stop = 1;
+		return;
+	}
+
+	alarm(1);
+}
 
 /*
  * Helper function to pretty-print cpuset into list for easy viewing.
@@ -676,8 +684,6 @@ update_done:
 }
 
 
-int idx_arr_size = INDEX_ARRAY_SIZE;
-int data_arr_size =  DATA_ARRAY_SIZE;
 int cpu_producer = -1, cpu_consumer = -1;
 unsigned long seed = 6407741;
 unsigned long cache_size = CACHE_SIZE;
