@@ -655,10 +655,10 @@ static void *consumer(void *arg)
 
 		time_diff_ns = compute_timediff(begin, end);
 
-		/* Iteration shouldn't take more than a milli-second */
-		if (time_diff_ns > ns_per_msec) {
+		/* Iteration shouldn't take more than 10 milli-seconds */
+		if (time_diff_ns > 10*ns_per_msec) {
 			debug_printf("========= WARNING !!!! ===================\n");
-			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, end.tv_nsec);
+			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, begin.tv_nsec);
 			debug_printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
 		        debug_printf("Diff  = %10lld ns\n", time_diff_ns);
 			debug_printf("========= END WARNING !!!! ===============\n");
