@@ -381,8 +381,8 @@ unsigned char stop = 0;
 #define READ 0
 #define WRITE 1
 
-static int pipe_fd1[2];
-static int pipe_fd2[2];
+static int pipe_fd_producer[2];
+static int pipe_fd_consumer[2];
 
 char c;
 
@@ -540,15 +540,15 @@ static void *producer(void *arg)
 		}
 
 		debug_printf("Producer writing to pipe\n");
-		assert(write(pipe_fd2[WRITE], &c, 1) == 1);
+		assert(write(pipe_fd_consumer[WRITE], &c, 1) == 1);
 
 		debug_printf("Producer waiting\n");
-		assert(read(pipe_fd1[READ], &c, 1) == 1);
+		assert(read(pipe_fd_producer[READ], &c, 1) == 1);
 		debug_printf("Producer read from pipe\n");
 	}
 
 	/* Wakeup the consumer, just in case! */
-	assert(write(pipe_fd2[WRITE], &c, 1) == 1);
+	assert(write(pipe_fd_consumer[WRITE], &c, 1) == 1);
 	CPU_FREE(cpuset);
 	return NULL;
 }
@@ -631,7 +631,7 @@ static void *consumer(void *arg)
 
 		debug_printf("Consumer While begin\n");
 		debug_printf("Consumer waiting\n");
-		assert(read(pipe_fd2[READ], &c, 1) == 1);
+		assert(read(pipe_fd_consumer[READ], &c, 1) == 1);
 		if (stop)
 			break;
 		debug_printf("Consumer read from pipe\n");
@@ -674,11 +674,11 @@ update_done:
 		data_array[idx].content = sum;
 
 		debug_printf("Consumer writing to pipe\n");
-		assert(write(pipe_fd1[WRITE], &c, 1) == 1);
+		assert(write(pipe_fd_producer[WRITE], &c, 1) == 1);
 	}
 
 	/* Wakeup the producer, just in case! */
-	assert(write(pipe_fd1[WRITE], &c, 1) == 1);
+	assert(write(pipe_fd_producer[WRITE], &c, 1) == 1);
 	CPU_FREE(cpuset);
 	return NULL;
 }
@@ -856,7 +856,7 @@ int main(int argc, char *argv[])
 
 	srandom(seed);
 
-	if (pipe(pipe_fd1) || pipe(pipe_fd2)) {
+	if (pipe(pipe_fd_producer) || pipe(pipe_fd_consumer)) {
 		printf("Error creating pipes\n");
 		exit(1);
 	}
