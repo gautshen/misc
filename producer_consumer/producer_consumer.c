@@ -533,7 +533,11 @@ static void *producer(void *arg)
 		idx_arr_size, data_arr_size);
 	debug_printf("Producer : data_array = 0x%llx\n",
 		data_array);
-	
+
+	/* Wait till all the consumers are created */
+	while (__atomic_load_n(&active_consumers, __ATOMIC_SEQ_CST) != 0) {
+		asm volatile("" : : : "memory");
+	}
 	signal(SIGALRM, sigalrm_handler);
 	alarm(1);
 
@@ -647,6 +651,7 @@ static void *consumer(void *arg)
 		c_id, data_array);
 
 	setup_counters();
+	__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST);
 	while (!stop) {
 		unsigned long idx = 0;
 		volatile unsigned int sum = 0;
@@ -946,6 +951,7 @@ int main(int argc, char *argv[])
 
 	setpgid(getpid(), getpid());
 
+	__atomic_store(&active_consumers, &nr_consumers, __ATOMIC_SEQ_CST);
 	producer_tid = create_thread("producer", &producer_attr,
 				     producer, cpu_producer, &producer_id);
 
