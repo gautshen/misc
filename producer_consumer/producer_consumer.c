@@ -405,6 +405,10 @@ struct data_args {
 
 int idx_arr_size = INDEX_ARRAY_SIZE;
 int data_arr_size =  DATA_ARRAY_SIZE;
+
+#define NR_RANDOM_ACCESS_PATTERNS 100
+unsigned long *random_indices[NR_RANDOM_ACCESS_PATTERNS];
+
 unsigned int nr_consumers = 0;
 
 /* We print the statistics of this last second here */
@@ -536,6 +540,9 @@ static void *producer(void *arg)
 
 	while (!stop) {
 
+		int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
+		unsigned long *cur_random_access = random_indices[pattern];
+
 		debug_printf("Producer while begin\n");
 		/*
 		 * We will write to p->idx_array_size random locations within
@@ -546,8 +553,8 @@ static void *producer(void *arg)
 			unsigned long idx;
 			unsigned long data;
 
-			idx = random() % data_arr_size;
-			data = random() % UINT_MAX;
+			idx = cur_random_access[i];
+			data = (idx << 2)  % UINT_MAX; //random() % UINT_MAX;
 
 			debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
@@ -649,7 +656,7 @@ static void *consumer(void *arg)
 		struct timespec begin, end;
 		unsigned long long time_diff_ns;
 		const unsigned long long ns_per_msec = 1000*1000;
-		clockid_t clockid  = CLOCK_THREAD_CPUTIME_ID;
+		clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 
 		debug_printf("Consumer(%d) While begin\n", c_id);
 		debug_printf("Consumer(%d) waiting\n", c_id);
@@ -917,6 +924,19 @@ int main(int argc, char *argv[])
 		if (pipe(pipe_fd_consumer[i])) {
 			printf("Error creating Consumer(%d) pipes\n", i);
 			exit(1);
+		}
+	}
+
+	for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++) {
+		int j;
+		random_indices[i] = malloc(idx_arr_size * sizeof(unsigned long));
+		if (!random_indices[i]) {
+			printf("Not enough memory for allocating random indices\n");
+			exit(1);
+		}
+
+		for (j = 0; j < idx_arr_size; j++) {
+			random_indices[i][j] = random() % data_arr_size;
 		}
 	}
 
