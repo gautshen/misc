@@ -35,6 +35,8 @@
 #include "perf_event.h"
 
 
+#define MAX_CONSUMERS 10
+
 #undef DEBUG
 #undef USE_L2_L3
 
@@ -216,11 +218,11 @@ static void reset_counters(void)
 }
 
 
-unsigned long iterations;
-unsigned long iterations_prev;
+unsigned long iterations[MAX_CONSUMERS];
+unsigned long iterations_prev[MAX_CONSUMERS];
 
-unsigned long long consumer_time_ns;
-unsigned long long consumer_time_ns_prev;
+unsigned long long consumer_time_ns[MAX_CONSUMERS];
+unsigned long long consumer_time_ns_prev[MAX_CONSUMERS];
 
 unsigned long long cache_refs_total;
 unsigned long long cache_refs_total_prev;
@@ -378,13 +380,14 @@ unsigned char stop = 0;
 #define DATA_ARRAY_SIZE  (INDEX_ARRAY_SIZE*1024)
 
 
+
 #define READ 0
 #define WRITE 1
 
 static int pipe_fd_producer[2];
-static int pipe_fd_consumer[2];
+static int pipe_fd_consumer[MAX_CONSUMERS][2];
 
-char c;
+char pipec;
 
 typedef unsigned long long u64;
 
@@ -402,14 +405,15 @@ struct data_args {
 
 int idx_arr_size = INDEX_ARRAY_SIZE;
 int data_arr_size =  DATA_ARRAY_SIZE;
+unsigned int nr_consumers = 0;
 
 /* We print the statistics of this last second here */
-static void sigalrm_handler(int junk)
+static void print_consumer_stat(int id)
 {
-	unsigned long i = iterations;
-	unsigned long long j = consumer_time_ns;
-	unsigned long iter_diff = i - iterations_prev;
-	unsigned long long time_ns_diff = j - consumer_time_ns_prev;
+	unsigned long i = iterations[id];
+	unsigned long long j = consumer_time_ns[id];
+	unsigned long iter_diff = i - iterations_prev[id];
+	unsigned long long time_ns_diff = j - consumer_time_ns_prev[id];
 	unsigned long long avg_time_ns = 0;
 	unsigned long long avg_access_time_ns = 0;
 
@@ -418,12 +422,21 @@ static void sigalrm_handler(int junk)
 
 	avg_access_time_ns = avg_time_ns/idx_arr_size;
 
-	printf("%8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
-	       iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
+	printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
+		id, iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
 	print_caches(iter_diff);
 
-	iterations_prev = i;
-	consumer_time_ns_prev = j;
+	iterations_prev[id] = i;
+	consumer_time_ns_prev[id] = j;
+
+}
+
+static void sigalrm_handler(int junk)
+{
+	int id;
+
+	for (id = 0; id < nr_consumers; id++)
+		print_consumer_stat(id);
 
 	if (--timeout == 0) {
 		stop = 1;
@@ -476,6 +489,9 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 	}
 }
 
+
+unsigned int active_consumers;
+struct data_args producer_args, consumer_args[MAX_CONSUMERS];
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -484,7 +500,7 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 static void *producer(void *arg)
 {
 	int i;
-	struct data_args *p = (struct data_args *) arg;
+	struct data_args *p = &producer_args;
 	unsigned long idx_arr_size = p->idx_arr_size;
 	unsigned long data_arr_size = p->data_arr_size;
 	unsigned long *index_array = p->index_array;
@@ -539,16 +555,20 @@ static void *producer(void *arg)
 			data_array[idx].content = data;
 		}
 
+		__atomic_store(&active_consumers, &nr_consumers, __ATOMIC_SEQ_CST);
 		debug_printf("Producer writing to pipe\n");
-		assert(write(pipe_fd_consumer[WRITE], &c, 1) == 1);
+		for (i = 0; i < nr_consumers; i++) {
+			assert(write(pipe_fd_consumer[i][WRITE], &pipec, 1) == 1);
+		}
 
 		debug_printf("Producer waiting\n");
-		assert(read(pipe_fd_producer[READ], &c, 1) == 1);
+		assert(read(pipe_fd_producer[READ], &pipec, 1) == 1);
 		debug_printf("Producer read from pipe\n");
 	}
 
 	/* Wakeup the consumer, just in case! */
-	assert(write(pipe_fd_consumer[WRITE], &c, 1) == 1);
+	for (i = 0; i < nr_consumers; i++)
+		assert(write(pipe_fd_consumer[i][WRITE], &pipec, 1) == 1);
 	CPU_FREE(cpuset);
 	return NULL;
 }
@@ -590,7 +610,8 @@ static unsigned long long compute_timediff(struct timespec before, struct timesp
 static void *consumer(void *arg)
 {
 	int i;
-	struct data_args *con = (struct data_args *) arg;
+	int c_id = *((int *)arg);
+	struct data_args *con = &consumer_args[c_id];
 	unsigned long idx_arr_size = con->idx_arr_size;
 	unsigned long data_arr_size = con->data_arr_size;
 	unsigned long *index_array = con->index_array;
@@ -614,12 +635,12 @@ static void *consumer(void *arg)
 	pthread_getaffinity_np(thread, size, cpuset);
 
 	cpuset_to_list(cpuset, cpu_list_str);
-	printf("Consumer affined to CPUs: %s\n", cpu_list_str);
+	printf("Consumer(%d) affined to CPUs: %s\n", c_id, cpu_list_str);
 
-	debug_printf("Consumer : idx_array_size = %ld,  data_array_size = %ld\n",
-		idx_arr_size, data_arr_size);
-	debug_printf("Consumer : idx_array = 0x%llx,  data_array = 0x%llx\n",
-		index_array, data_array);
+	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
+		c_id, idx_arr_size, data_arr_size);
+	debug_printf("Consumer(%d) : idx_array = 0x%llx,  data_array = 0x%llx\n",
+		c_id, index_array, data_array);
 
 	setup_counters();
 	while (!stop) {
@@ -628,16 +649,17 @@ static void *consumer(void *arg)
 		struct timespec begin, end;
 		unsigned long long time_diff_ns;
 		const unsigned long long ns_per_msec = 1000*1000;
+		clockid_t clockid  = CLOCK_THREAD_CPUTIME_ID;
 
-		debug_printf("Consumer While begin\n");
-		debug_printf("Consumer waiting\n");
-		assert(read(pipe_fd_consumer[READ], &c, 1) == 1);
+		debug_printf("Consumer(%d) While begin\n", c_id);
+		debug_printf("Consumer(%d) waiting\n", c_id);
+		assert(read(pipe_fd_consumer[c_id][READ], &pipec, 1) == 1);
 		if (stop)
 			break;
-		debug_printf("Consumer read from pipe\n");
-		debug_printf("Consume idx_arr_size = %ld\n", idx_arr_size);
+		debug_printf("Consumer(%d) read from pipe\n", c_id);
+		debug_printf("Consumer(%d) idx_arr_size = %ld\n", c_id, idx_arr_size);
 
-		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begin);
+		clock_gettime(clockid, &begin);
 		start_counters();
 		for (i = 0; i < idx_arr_size; i++) {
 			unsigned long idx;
@@ -646,17 +668,17 @@ static void *consumer(void *arg)
 			idx = index_array[i];
 			data = data_array[idx].content;
 
-			debug_printf("Consumer : [%d] = %ld,  [%ld] = 0x%llx\n",
-				i, idx, idx, data);
+			debug_printf("Consumer(%d) : [%d] = %ld,  [%ld] = 0x%llx\n",
+				c_id, i, idx, idx, data);
 			sum = (sum + data) % INT_MAX;
 		}
 		stop_counters();
-		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end);
+		clock_gettime(clockid, &end);
 
 		time_diff_ns = compute_timediff(begin, end);
 
-		/* Iteration shouldn't take more than 10 milli-seconds */
-		if (time_diff_ns > 10*ns_per_msec) {
+		/* Iteration shouldn't take more than a second */
+		if (time_diff_ns > 1000*ns_per_msec) {
 			debug_printf("========= WARNING !!!! ===================\n");
 			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, begin.tv_nsec);
 			debug_printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
@@ -664,27 +686,32 @@ static void *consumer(void *arg)
 			debug_printf("========= END WARNING !!!! ===============\n");
 			goto update_done;
 		}
-		iterations++;
-		consumer_time_ns += time_diff_ns;
+		iterations[c_id]++;
+		consumer_time_ns[c_id] += time_diff_ns;
 		read_counters();
 update_done:
 		reset_counters();
 		idx = 0;
-		debug_printf("Consumer writing [%ld] = 0x%llx\n", idx, sum);
+		debug_printf("Consumer(%d) writing [%ld] = 0x%llx\n", c_id, idx, sum);
 		data_array[idx].content = sum;
 
-		debug_printf("Consumer writing to pipe\n");
-		assert(write(pipe_fd_producer[WRITE], &c, 1) == 1);
+
+		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
+			debug_printf("Consumer(%d) writing to pipe\n", c_id);
+			assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
+		}
 	}
 
 	/* Wakeup the producer, just in case! */
-	assert(write(pipe_fd_producer[WRITE], &c, 1) == 1);
+	assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
 	CPU_FREE(cpuset);
 	return NULL;
 }
 
 
-int cpu_producer = -1, cpu_consumer = -1;
+int cpu_producer = -1;
+int cpu_consumer[MAX_CONSUMERS] = {[0 ... (MAX_CONSUMERS-1)] = -1};
+
 unsigned long seed = 6407741;
 unsigned long cache_size = CACHE_SIZE;
 unsigned long *idx_arr;
@@ -725,6 +752,7 @@ void parse_args(int argc, char *argv[])
 		};
 
 		int option_index = 0;
+		int cpu;
 
 		c = getopt_long(argc, argv, "hp:c:r:l:s:t:", long_options, &option_index);
 
@@ -750,7 +778,14 @@ void parse_args(int argc, char *argv[])
 			break;
 
 		case 'c':
-			cpu_consumer = (int) strtoul(optarg, NULL, 10);
+			if (nr_consumers >= MAX_CONSUMERS) {
+				printf("Exceeded the maximum allowed consumers. Ignoring..\n");
+				break;
+			}
+
+			cpu =  (int) strtoul(optarg, NULL, 10);
+			cpu_consumer[nr_consumers] = cpu;
+			nr_consumers++;
 			break;
 
 		case 'r':
@@ -790,13 +825,19 @@ void parse_args(int argc, char *argv[])
 }
 
 pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void *),
-			struct data_args *args, int cpu)
+			int cpu, int *consumer_id)
 {
 	pthread_t tid;
 	cpu_set_t *cpuset;
 	size_t size;
 	static int max_cpus = 2048;
+	struct data_args *args;
+	void *thread_args = (void *)consumer_id;
 
+	if (*consumer_id == -1)
+		args = &producer_args;
+	else
+		args = &consumer_args[*consumer_id];
         args->idx_arr_size = idx_arr_size;
 	args->index_array = idx_arr;
 
@@ -817,33 +858,43 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 		if (pthread_attr_setaffinity_np(attr,
 						size,
 						cpuset)) {
-			perror("Error setting affinity for producer");
+			perror("Error setting affinity");
 			exit(1);
 		}
 	}
 
-	if (pthread_create(&tid, attr, fn, args)) {
+	if (pthread_create(&tid, attr, fn, thread_args)) {
 		printf("Error creating the %s\n", name);
 		exit(1);
 	} else if (verbose) {
 		printf("%s created with tid %ld\n", name, tid);
 	}
 
-	CPU_FREE(cpuset);
+	if (cpu != -1)
+		CPU_FREE(cpuset);
+
 	return tid;
 }
 
 int main(int argc, char *argv[])
 {
 	signed char c;
-	pthread_t producer_tid, consumer_tid;	
-	pthread_attr_t producer_attr, consumer_attr;
-	struct data_args producer_args, consumer_args;
+	pthread_t producer_tid, consumer_tid[MAX_CONSUMERS];
+	pthread_attr_t producer_attr, consumer_attr[MAX_CONSUMERS];
+	int producer_id = -1;
+	int consumer_id[MAX_CONSUMERS];
+	int i;
+
 
 	parse_args(argc, argv);
 
 	if (idx_arr_size * 1024 < DATA_ARRAY_SIZE)
 		data_arr_size = idx_arr_size * 1024;
+
+	if (nr_consumers == 0) {
+		printf("Setting number of consumers to 1\n");
+		nr_consumers = 1;
+	}
 
 	if (verbose) {
 		printf("seed = %ld\n", seed);
@@ -856,9 +907,17 @@ int main(int argc, char *argv[])
 
 	srandom(seed);
 
-	if (pipe(pipe_fd_producer) || pipe(pipe_fd_consumer)) {
-		printf("Error creating pipes\n");
+	if (pipe(pipe_fd_producer)) {
+
+		printf("Error creating Producer pipes\n");
 		exit(1);
+	}
+
+	for (i = 0; i < nr_consumers; i++) {
+		if (pipe(pipe_fd_consumer[i])) {
+			printf("Error creating Consumer(%d) pipes\n", i);
+			exit(1);
+		}
 	}
 
 	idx_arr = malloc(idx_arr_size * sizeof(unsigned long));
@@ -883,16 +942,21 @@ int main(int argc, char *argv[])
 	setpgid(getpid(), getpid());
 
 	producer_tid = create_thread("producer", &producer_attr,
-				     producer, &producer_args, cpu_producer);
+				     producer, cpu_producer, &producer_id);
 
-	consumer_tid = create_thread("consumer", &consumer_attr,
-				     consumer, &consumer_args, cpu_consumer);
+	for (i = 0; i < nr_consumers; i++) {
+		consumer_id[i] = i;
+		consumer_tid[i] = create_thread("consumer", &consumer_attr[i],
+					consumer, cpu_consumer[i], &consumer_id[i]);
+	}
 
 	pthread_join(producer_tid, NULL);
-	pthread_join(consumer_tid, NULL);
+	for (i = 0; i < nr_consumers; i++)
+		pthread_join(consumer_tid[i], NULL);
 
 	pthread_attr_destroy(&producer_attr);
-	pthread_attr_destroy(&consumer_attr);
+	for (i = 0; i < nr_consumers; i++)
+		pthread_attr_destroy(&consumer_attr[i]);
 	free(idx_arr);
 	free(data_arr);
 
