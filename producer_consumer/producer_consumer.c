@@ -399,7 +399,6 @@ struct big_data {
 struct data_args {
 	unsigned long idx_arr_size;
 	unsigned long data_arr_size;
-	unsigned long *index_array;
 	struct big_data *data_array;
 };
 
@@ -496,10 +495,11 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 
 unsigned int active_consumers;
 struct data_args producer_args, consumer_args[MAX_CONSUMERS];
+unsigned long *cur_random_access;
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
- * in index_array for the consumer to later access.
+ * in cur_random_access for the consumer to later access.
  */
 static void *producer(void *arg)
 {
@@ -507,7 +507,6 @@ static void *producer(void *arg)
 	struct data_args *p = &producer_args;
 	unsigned long idx_arr_size = p->idx_arr_size;
 	unsigned long data_arr_size = p->data_arr_size;
-	unsigned long *index_array = p->index_array;
 	struct big_data *data_array = p->data_array;
 	pthread_t thread = pthread_self();
         cpu_set_t *cpuset;
@@ -532,8 +531,8 @@ static void *producer(void *arg)
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
-	debug_printf("Producer : idx_array = 0x%llx,  data_array = 0x%llx\n",
-		index_array, data_array);
+	debug_printf("Producer : data_array = 0x%llx\n",
+		data_array);
 	
 	signal(SIGALRM, sigalrm_handler);
 	alarm(1);
@@ -541,13 +540,13 @@ static void *producer(void *arg)
 	while (!stop) {
 
 		int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
-		unsigned long *cur_random_access = random_indices[pattern];
+
+		cur_random_access = random_indices[pattern];
 
 		debug_printf("Producer while begin\n");
 		/*
-		 * We will write to p->idx_array_size random locations within
-		 * the p->data_array. We record where we have written in
-		 * p->index_array
+		 * We will write to p->idx_array_size random locations provided
+		 * by cur_random_access. 
 		 */
 		for (i = 0; i < idx_arr_size; i++) {
 			unsigned long idx;
@@ -558,7 +557,6 @@ static void *producer(void *arg)
 
 			debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
-			index_array[i] = idx;
 			data_array[idx].content = data;
 		}
 
@@ -612,7 +610,7 @@ static unsigned long long compute_timediff(struct timespec before, struct timesp
 /*
  * Consumer function : Performs idx_arr_size number of loads from the
  * locations in data_array. These were the ones that producer had
- * written to and are obtained from index_array.
+ * written to and are obtained from cur_random_access.
  */
 static void *consumer(void *arg)
 {
@@ -621,7 +619,6 @@ static void *consumer(void *arg)
 	struct data_args *con = &consumer_args[c_id];
 	unsigned long idx_arr_size = con->idx_arr_size;
 	unsigned long data_arr_size = con->data_arr_size;
-	unsigned long *index_array = con->index_array;
 	struct big_data *data_array = con->data_array;
 	pthread_t thread = pthread_self();
         cpu_set_t *cpuset;
@@ -646,8 +643,8 @@ static void *consumer(void *arg)
 
 	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
 		c_id, idx_arr_size, data_arr_size);
-	debug_printf("Consumer(%d) : idx_array = 0x%llx,  data_array = 0x%llx\n",
-		c_id, index_array, data_array);
+	debug_printf("Consumer(%d) : data_array = 0x%llx\n",
+		c_id, data_array);
 
 	setup_counters();
 	while (!stop) {
@@ -672,7 +669,7 @@ static void *consumer(void *arg)
 			unsigned long idx;
 			unsigned long data;
 
-			idx = index_array[i];
+			idx = cur_random_access[i];
 			data = data_array[idx].content;
 
 			debug_printf("Consumer(%d) : [%d] = %ld,  [%ld] = 0x%llx\n",
@@ -721,7 +718,6 @@ int cpu_consumer[MAX_CONSUMERS] = {[0 ... (MAX_CONSUMERS-1)] = -1};
 
 unsigned long seed = 6407741;
 unsigned long cache_size = CACHE_SIZE;
-unsigned long *idx_arr;
 struct big_data *data_arr;
 
 void print_usage(int argc, char *argv[])
@@ -846,7 +842,6 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 	else
 		args = &consumer_args[*consumer_id];
         args->idx_arr_size = idx_arr_size;
-	args->index_array = idx_arr;
 
 	args->data_arr_size = data_arr_size;
 	args->data_array = data_arr;
@@ -940,16 +935,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	idx_arr = malloc(idx_arr_size * sizeof(unsigned long));
-
-	if (!idx_arr) {
-		printf("Not enough memory for allocating an index array\n");
-		exit(1);
-	}
-
-	if (verbose)
-		printf("idx_arr = 0x%p\n", (void *)idx_arr);
-
 	data_arr = malloc(data_arr_size * sizeof(struct big_data));
 	if (!data_arr) {
 		printf("Not enough memory for allocating an data array\n");
@@ -977,8 +962,8 @@ int main(int argc, char *argv[])
 	pthread_attr_destroy(&producer_attr);
 	for (i = 0; i < nr_consumers; i++)
 		pthread_attr_destroy(&consumer_attr[i]);
-	free(idx_arr);
 	free(data_arr);
-
+	for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++)
+		free(random_indices[i]);
 	return 0;
 }
