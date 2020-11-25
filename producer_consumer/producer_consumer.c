@@ -408,6 +408,7 @@ int data_arr_size =  DATA_ARRAY_SIZE;
 #define NR_RANDOM_ACCESS_PATTERNS 100
 unsigned long *random_indices[NR_RANDOM_ACCESS_PATTERNS];
 int precompute_random = 0;
+int intermediate_stats = 0;
 unsigned int nr_consumers = 0;
 
 /* We print the statistics of this last second here */
@@ -706,7 +707,8 @@ update_done:
 		data_array[idx].content = sum;
 
 
-		if (iterations[c_id] - iterations_prev[c_id] == 5000)
+		if (intermediate_stats &&
+		    (iterations[c_id] - iterations_prev[c_id] == 5000))
 			print_consumer_stat(c_id);
 
 		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
@@ -718,7 +720,8 @@ update_done:
 	/* Wakeup the producer, just in case! */
 	assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
 	CPU_FREE(cpuset);
-	print_consumer_stat(c_id);
+	if (intermediate_stats)
+		print_consumer_stat(c_id);
 	return NULL;
 }
 
@@ -741,6 +744,8 @@ void print_usage(int argc, char *argv[])
 	printf("-s, --cache-size\t\t Size of the cache in bytes.\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
 	printf("    --verbose\t\t\t Also print the cache-access statistics\n");
+	printf("    --precompute-random\t\t\t Precompute the random-access pattern\n");
+	printf("    --intermediate-stats\t\t\t Print consumer stats every 5000 iterations\n");
 	printf("Note : Atmost one of --iteration-length or --cache-size can be provided\n");
 }
 
@@ -761,6 +766,7 @@ void parse_args(int argc, char *argv[])
 			{"cache-size", required_argument, 0, 's'},
 			{"timeout", required_argument, 0, 't'},
 			{"precompute-random", no_argument, &precompute_random, 1},
+			{"intermediate-stats", no_argument, &intermediate_stats, 1},
 			{"help", no_argument, 0, 'h'},
 			{0, 0, 0, 0},
 		};
