@@ -436,17 +436,7 @@ static void print_consumer_stat(int id)
 
 static void sigalrm_handler(int junk)
 {
-	int id;
-
-	for (id = 0; id < nr_consumers; id++)
-		print_consumer_stat(id);
-
-	if (--timeout == 0) {
-		stop = 1;
-		return;
-	}
-
-	alarm(1);
+	stop = 1;
 }
 
 /*
@@ -540,7 +530,7 @@ static void *producer(void *arg)
 		asm volatile("" : : : "memory");
 	}
 	signal(SIGALRM, sigalrm_handler);
-	alarm(1);
+	alarm(timeout);
 
 	while (!stop) {
 
@@ -716,6 +706,9 @@ update_done:
 		data_array[idx].content = sum;
 
 
+		if (iterations[c_id] - iterations_prev[c_id] == 5000)
+			print_consumer_stat(c_id);
+
 		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
 			debug_printf("Consumer(%d) writing to pipe\n", c_id);
 			assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
@@ -725,6 +718,7 @@ update_done:
 	/* Wakeup the producer, just in case! */
 	assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
 	CPU_FREE(cpuset);
+	print_consumer_stat(c_id);
 	return NULL;
 }
 
@@ -988,6 +982,15 @@ int main(int argc, char *argv[])
 	for (i = 0; i < nr_consumers; i++)
 		pthread_join(consumer_tid[i], NULL);
 
+	printf("===============================================\n");
+	printf("                  Summary \n");
+	printf("===============================================\n");
+	for (i = 0; i < nr_consumers; i++) {
+		iterations_prev[i] = 0;
+		consumer_time_ns_prev[i] = 0;
+		print_consumer_stat(i);
+	}
+	printf("===============================================\n");
 	pthread_attr_destroy(&producer_attr);
 	for (i = 0; i < nr_consumers; i++)
 		pthread_attr_destroy(&consumer_attr[i]);
