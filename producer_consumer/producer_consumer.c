@@ -407,7 +407,7 @@ int data_arr_size =  DATA_ARRAY_SIZE;
 
 #define NR_RANDOM_ACCESS_PATTERNS 100
 unsigned long *random_indices[NR_RANDOM_ACCESS_PATTERNS];
-
+int precompute_random = 0;
 unsigned int nr_consumers = 0;
 
 /* We print the statistics of this last second here */
@@ -496,6 +496,7 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 unsigned int active_consumers;
 struct data_args producer_args, consumer_args[MAX_CONSUMERS];
 unsigned long *cur_random_access;
+unsigned long *idx_arr;
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -543,9 +544,13 @@ static void *producer(void *arg)
 
 	while (!stop) {
 
-		int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
+		if (precompute_random) {
+			int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
 
-		cur_random_access = random_indices[pattern];
+			cur_random_access = random_indices[pattern];
+		} else {
+			cur_random_access = idx_arr;
+		}
 
 		debug_printf("Producer while begin\n");
 		/*
@@ -556,8 +561,14 @@ static void *producer(void *arg)
 			unsigned long idx;
 			unsigned long data;
 
-			idx = cur_random_access[i];
-			data = (idx << 2)  % UINT_MAX; //random() % UINT_MAX;
+			if (precompute_random) {
+				idx = cur_random_access[i];
+				data = (idx << 2)  % UINT_MAX;
+			} else {
+				idx = random() % data_arr_size;
+				data = random() % UINT_MAX;
+				cur_random_access[i] = idx;
+			}
 
 			debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
 				i, idx, idx, data);
@@ -755,6 +766,7 @@ void parse_args(int argc, char *argv[])
 			{"iteration-length", required_argument, 0, 'l'},
 			{"cache-size", required_argument, 0, 's'},
 			{"timeout", required_argument, 0, 't'},
+			{"precompute-random", no_argument, &precompute_random, 1},
 			{"help", no_argument, 0, 'h'},
 			{0, 0, 0, 0},
 		};
@@ -927,17 +939,28 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++) {
-		int j;
-		random_indices[i] = malloc(idx_arr_size * sizeof(unsigned long));
-		if (!random_indices[i]) {
-			printf("Not enough memory for allocating random indices\n");
+	if (precompute_random) {
+		for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++) {
+			int j;
+			random_indices[i] = malloc(idx_arr_size * sizeof(unsigned long));
+			if (!random_indices[i]) {
+				printf("Not enough memory for allocating random indices\n");
+				exit(1);
+			}
+
+			for (j = 0; j < idx_arr_size; j++) {
+				random_indices[i][j] = random() % data_arr_size;
+			}
+		}
+	} else {
+		idx_arr = malloc(idx_arr_size * sizeof(unsigned long));
+		if (!idx_arr) {
+			printf("Not enough memory for allocating an index array\n");
 			exit(1);
 		}
 
-		for (j = 0; j < idx_arr_size; j++) {
-			random_indices[i][j] = random() % data_arr_size;
-		}
+		if (verbose)
+			printf("Not enough memory for allocating an index array\n");
 	}
 
 	data_arr = malloc(data_arr_size * sizeof(struct big_data));
@@ -969,7 +992,12 @@ int main(int argc, char *argv[])
 	for (i = 0; i < nr_consumers; i++)
 		pthread_attr_destroy(&consumer_attr[i]);
 	free(data_arr);
-	for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++)
-		free(random_indices[i]);
+	if (precompute_random) {
+		for (i = 0; i < NR_RANDOM_ACCESS_PATTERNS; i++)
+			free(random_indices[i]);
+	} else {
+		free(idx_arr);
+	}
+
 	return 0;
 }
