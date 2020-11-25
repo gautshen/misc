@@ -35,6 +35,7 @@
 #include "perf_event.h"
 
 
+#define gettid()  syscall(SYS_gettid)
 #define MAX_CONSUMERS 10
 
 #undef DEBUG
@@ -504,6 +505,7 @@ static void *producer(void *arg)
         cpu_set_t *cpuset;
 	size_t size;
 	static int max_cpus = 2048;
+	pid_t my_pid = gettid();
 
 	char cpu_list_str[2048];
 
@@ -519,7 +521,7 @@ static void *producer(void *arg)
 	pthread_getaffinity_np(thread, size, cpuset);
 
 	cpuset_to_list(cpuset, cpu_list_str);
-	printf("Producer affined to CPUs: %s\n", cpu_list_str);
+	printf("Producer[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
 		idx_arr_size, data_arr_size);
@@ -630,7 +632,7 @@ static void *consumer(void *arg)
         cpu_set_t *cpuset;
 	size_t size;
 	static int max_cpus = 2048;
-
+	pid_t my_pid = gettid();
 	char cpu_list_str[2048];
 
 	cpuset = CPU_ALLOC(max_cpus);
@@ -645,7 +647,7 @@ static void *consumer(void *arg)
 	pthread_getaffinity_np(thread, size, cpuset);
 
 	cpuset_to_list(cpuset, cpu_list_str);
-	printf("Consumer(%d) affined to CPUs: %s\n", c_id, cpu_list_str);
+	printf("Consumer(%d)[PID %d] affined to CPUs: %s\n", c_id, my_pid, cpu_list_str);
 
 	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
 		c_id, idx_arr_size, data_arr_size);
