@@ -222,8 +222,15 @@ static void reset_counters(void)
 unsigned long iterations[MAX_CONSUMERS];
 unsigned long iterations_prev[MAX_CONSUMERS];
 
+unsigned long fib_iterations[MAX_CONSUMERS];
+unsigned long fib_iterations_prev[MAX_CONSUMERS];
+
 unsigned long long consumer_time_ns[MAX_CONSUMERS];
 unsigned long long consumer_time_ns_prev[MAX_CONSUMERS];
+
+unsigned long max_fib_iterations = 0;
+unsigned long long consumer_fib_ns[MAX_CONSUMERS];
+unsigned long long consumer_fib_ns_prev[MAX_CONSUMERS];
 
 unsigned long long cache_refs_total;
 unsigned long long cache_refs_total_prev;
@@ -421,6 +428,9 @@ static void print_consumer_stat(int id)
 	unsigned long long time_ns_diff = j - consumer_time_ns_prev[id];
 	unsigned long long avg_time_ns = 0;
 	unsigned long long avg_access_time_ns = 0;
+	unsigned long fib_iter_diff;
+	unsigned long fib_time_ns_diff;
+	unsigned long avg_fib_time_ns;
 
 	if (iter_diff)
 		avg_time_ns = (time_ns_diff) / iter_diff;
@@ -431,9 +441,26 @@ static void print_consumer_stat(int id)
 		id, iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
 	print_caches(iter_diff);
 
+
 	iterations_prev[id] = i;
 	consumer_time_ns_prev[id] = j;
 
+
+	i = fib_iterations[id];
+	j = consumer_fib_ns[id];
+	fib_iter_diff = i - fib_iterations_prev[id];
+	fib_time_ns_diff = j - consumer_fib_ns_prev[id];
+
+
+	if (max_fib_iterations && fib_iter_diff)
+		avg_fib_time_ns = fib_time_ns_diff / fib_iter_diff;
+	if (max_fib_iterations) {
+		printf("Consumer(%d) : %8ld fibonacci iterations of length %d. avg time: %6lld ns\n",
+			id, fib_iter_diff, max_fib_iterations, avg_fib_time_ns);
+	}
+
+	fib_iterations_prev[id] = i;
+	consumer_fib_ns_prev[id] = j;
 }
 
 static void sigalrm_handler(int junk)
@@ -713,6 +740,23 @@ update_done:
 		    (iterations[c_id] - iterations_prev[c_id] == 5000))
 			print_consumer_stat(c_id);
 
+		if (max_fib_iterations) {
+			int i;
+			int a = 0, b = 1 , c;
+
+			clock_gettime(clockid, &begin);
+			for (i = 0; i < max_fib_iterations; i++) {
+				c = a + b;
+				a = b;
+				b = c;
+			}
+			clock_gettime(clockid, &end);
+			time_diff_ns = compute_timediff(begin, end);
+			fib_iterations[c_id]++;
+			consumer_fib_ns[c_id] += time_diff_ns;
+			data_array[idx].content = c;
+		}
+
 		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
 			debug_printf("Consumer(%d) writing to pipe\n", c_id);
 			assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
@@ -745,9 +789,11 @@ void print_usage(int argc, char *argv[])
 	printf("-l, --iteration-length\t\t The number of loads per consumer-iteration\n");
 	printf("-s, --cache-size\t\t Size of the cache in bytes.\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
+	printf("-f, --fib\t\t\t  The number of fibonacci numbers to compute by the consumer\n");
 	printf("    --verbose\t\t\t Also print the cache-access statistics\n");
 	printf("    --precompute-random\t\t\t Precompute the random-access pattern\n");
 	printf("    --intermediate-stats\t\t\t Print consumer stats every 5000 iterations\n");
+
 	printf("Note : Atmost one of --iteration-length or --cache-size can be provided\n");
 }
 
@@ -767,6 +813,7 @@ void parse_args(int argc, char *argv[])
 			{"iteration-length", required_argument, 0, 'l'},
 			{"cache-size", required_argument, 0, 's'},
 			{"timeout", required_argument, 0, 't'},
+			{"fib", required_argument, 0, 'f'},
 			{"precompute-random", no_argument, &precompute_random, 1},
 			{"intermediate-stats", no_argument, &intermediate_stats, 1},
 			{"help", no_argument, 0, 'h'},
@@ -776,7 +823,7 @@ void parse_args(int argc, char *argv[])
 		int option_index = 0;
 		int cpu;
 
-		c = getopt_long(argc, argv, "hp:c:r:l:s:t:", long_options, &option_index);
+		c = getopt_long(argc, argv, "hp:c:r:l:s:t:f:", long_options, &option_index);
 
 		/* Options are done */
 		if (c == -1)
@@ -836,6 +883,10 @@ void parse_args(int argc, char *argv[])
 
 		case 't':
 			timeout = strtoul(optarg, NULL, 10);
+			break;
+
+		case 'f':
+			max_fib_iterations = strtoul(optarg, NULL, 10);
 			break;
 
 		default:
@@ -996,6 +1047,8 @@ int main(int argc, char *argv[])
 	for (i = 0; i < nr_consumers; i++) {
 		iterations_prev[i] = 0;
 		consumer_time_ns_prev[i] = 0;
+		fib_iterations_prev[i] = 0;
+		consumer_fib_ns_prev[i] = 0;
 		print_consumer_stat(i);
 	}
 	printf("===============================================\n");
