@@ -604,6 +604,12 @@ static void print_intermediate_stats(int c_id)
 		print_consumer_stat(c_id);
 }
 
+static void signal_consumer_active(int c_id)
+{
+	debug_printf("Consumer(%d) is active\n", c_id);
+	__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST);
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -814,7 +820,7 @@ static void *consumer(void *arg)
 		c_id, data_array);
 
 	setup_counters();
-	__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST);
+	signal_consumer_active(c_id);
 	while (!stop) {
 
 		consumer_wait(c_id);
