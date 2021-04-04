@@ -574,6 +574,14 @@ static void producer_wait(void)
 	debug_printf("Producer read from pipe\n");
 }
 
+static void consumer_wait(int c_id)
+{
+	debug_printf("Consumer(%d) While begin\n", c_id);
+	debug_printf("Consumer(%d) waiting\n", c_id);
+	assert(read(pipe_fd_consumer[c_id][READ], &pipec, 1) == 1);
+
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -627,9 +635,7 @@ static void *producer(void *arg)
 		producer_wait();
 	}
 
-	/* Wakeup the consumer, just in case! */
-	for (i = 0; i < nr_consumers; i++)
-		assert(write(pipe_fd_consumer[i][WRITE], &pipec, 1) == 1);
+	wake_all_consumers();
 	CPU_FREE(cpuset);
 	return NULL;
 }
@@ -661,6 +667,61 @@ static unsigned long long compute_timediff(struct timespec before, struct timesp
 	}
 
 	return 0;
+}
+
+
+static void consumer_load_from_cache(int c_id)
+{
+	int i;
+	struct data_args *con = &consumer_args[c_id];
+	unsigned long idx_arr_size = con->idx_arr_size;
+	unsigned long data_arr_size = con->data_arr_size;
+	struct big_data *data_array = con->data_array;
+	unsigned long idx = 0;
+	volatile unsigned int sum = 0;
+	struct timespec begin, end;
+	unsigned long long time_diff_ns;
+	const unsigned long long ns_per_msec = 1000*1000;
+	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
+
+	debug_printf("Consumer(%d) read from pipe\n", c_id);
+	debug_printf("Consumer(%d) idx_arr_size = %ld\n", c_id, idx_arr_size);
+
+	clock_gettime(clockid, &begin);
+	start_counters();
+	for (i = 0; i < idx_arr_size; i++) {
+		unsigned long idx;
+		unsigned long data;
+
+		idx = cur_random_access[i];
+		data = data_array[idx].content;
+
+		debug_printf("Consumer(%d) : [%d] = %ld,  [%ld] = 0x%llx\n",
+			c_id, i, idx, idx, data);
+		sum = (sum + data) % INT_MAX;
+	}
+	stop_counters();
+	clock_gettime(clockid, &end);
+
+	time_diff_ns = compute_timediff(begin, end);
+
+	/* Iteration shouldn't take more than a second */
+	if (time_diff_ns > 1000*ns_per_msec) {
+		debug_printf("========= WARNING !!!! ===================\n");
+		debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, begin.tv_nsec);
+		debug_printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
+	        debug_printf("Diff  = %10lld ns\n", time_diff_ns);
+		debug_printf("========= END WARNING !!!! ===============\n");
+		goto update_done;
+	}
+	iterations[c_id]++;
+	consumer_time_ns[c_id] += time_diff_ns;
+	read_counters();
+update_done:
+	reset_counters();
+	idx = 0;
+	debug_printf("Consumer(%d) writing [%ld] = 0x%llx\n", c_id, idx, sum);
+	data_array[idx].content = sum;
 }
 
 /*
@@ -712,50 +773,11 @@ static void *consumer(void *arg)
 		const unsigned long long ns_per_msec = 1000*1000;
 		clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 
-		debug_printf("Consumer(%d) While begin\n", c_id);
-		debug_printf("Consumer(%d) waiting\n", c_id);
-		assert(read(pipe_fd_consumer[c_id][READ], &pipec, 1) == 1);
+		consumer_wait(c_id);
 		if (stop)
 			break;
-		debug_printf("Consumer(%d) read from pipe\n", c_id);
-		debug_printf("Consumer(%d) idx_arr_size = %ld\n", c_id, idx_arr_size);
 
-		clock_gettime(clockid, &begin);
-		start_counters();
-		for (i = 0; i < idx_arr_size; i++) {
-			unsigned long idx;
-			unsigned long data;
-
-			idx = cur_random_access[i];
-			data = data_array[idx].content;
-
-			debug_printf("Consumer(%d) : [%d] = %ld,  [%ld] = 0x%llx\n",
-				c_id, i, idx, idx, data);
-			sum = (sum + data) % INT_MAX;
-		}
-		stop_counters();
-		clock_gettime(clockid, &end);
-
-		time_diff_ns = compute_timediff(begin, end);
-
-		/* Iteration shouldn't take more than a second */
-		if (time_diff_ns > 1000*ns_per_msec) {
-			debug_printf("========= WARNING !!!! ===================\n");
-			debug_printf("Begin = %10ld.%09ld ns\n", begin.tv_sec, begin.tv_nsec);
-			debug_printf("End   = %10ld.%09ld ns\n", end.tv_sec, end.tv_nsec);
-		        debug_printf("Diff  = %10lld ns\n", time_diff_ns);
-			debug_printf("========= END WARNING !!!! ===============\n");
-			goto update_done;
-		}
-		iterations[c_id]++;
-		consumer_time_ns[c_id] += time_diff_ns;
-		read_counters();
-update_done:
-		reset_counters();
-		idx = 0;
-		debug_printf("Consumer(%d) writing [%ld] = 0x%llx\n", c_id, idx, sum);
-		data_array[idx].content = sum;
-
+		consumer_load_from_cache(c_id);
 
 		if (intermediate_stats &&
 		    (iterations[c_id] - iterations_prev[c_id] == 5000))
