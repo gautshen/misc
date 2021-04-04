@@ -478,18 +478,14 @@ static void print_consumer_stat(int id)
 
 	avg_access_time_ns = avg_time_ns/idx_arr_size;
 
-	if (print_cache_stats) {
-		print_caches(id, iter_diff);
-	} else {
-		printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
+	printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
 		id, iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
-	}
 
-
+	if (print_cache_stats)
+		print_caches(id, iter_diff);
 
 	iterations_prev[id] = i;
 	consumer_time_ns_prev[id] = j;
-
 
 	i = fib_iterations[id];
 	j = consumer_fib_ns[id];
