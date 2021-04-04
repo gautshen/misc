@@ -646,16 +646,8 @@ static void print_consumer_thread_details(int c_id)
 	CPU_FREE(cpuset);
 }
 
-
-/*
- * Producer function : Performs idx_arr_size number of stores to
- * random locations in the data_array.  These locations are recorded
- * in cur_random_access for the consumer to later access.
- */
-static void *producer(void *arg)
+static void print_producer_thread_details(struct data_args *p)
 {
-	int i;
-	struct data_args *p = &producer_args;
 	unsigned long idx_arr_size = p->idx_arr_size;
 	unsigned long data_arr_size = p->data_arr_size;
 	struct big_data *data_array = p->data_array;
@@ -685,11 +677,29 @@ static void *producer(void *arg)
 		idx_arr_size, data_arr_size);
 	debug_printf("Producer : data_array = 0x%llx\n",
 		data_array);
+	CPU_FREE(cpuset);
+}
 
+static void producer_wait_for_consumers_active(void)
+{
 	/* Wait till all the consumers are created */
 	while (__atomic_load_n(&active_consumers, __ATOMIC_SEQ_CST) != 0) {
 		asm volatile("" : : : "memory");
 	}
+}
+
+/*
+ * Producer function : Performs idx_arr_size number of stores to
+ * random locations in the data_array.  These locations are recorded
+ * in cur_random_access for the consumer to later access.
+ */
+static void *producer(void *arg)
+{
+
+	struct data_args *p = &producer_args;
+
+	print_producer_thread_details(p);
+	producer_wait_for_consumers_active();
 	signal(SIGALRM, sigalrm_handler);
 	alarm(timeout);
 
@@ -701,7 +711,7 @@ static void *producer(void *arg)
 	}
 
 	wake_all_consumers();
-	CPU_FREE(cpuset);
+
 	return NULL;
 }
 
@@ -740,7 +750,6 @@ static void consumer_load_from_cache(int c_id)
 	int i;
 	struct data_args *con = &consumer_args[c_id];
 	unsigned long idx_arr_size = con->idx_arr_size;
-	unsigned long data_arr_size = con->data_arr_size;
 	struct big_data *data_array = con->data_array;
 	unsigned long idx = 0;
 	volatile unsigned int sum = 0;
@@ -779,6 +788,7 @@ static void consumer_load_from_cache(int c_id)
 		debug_printf("========= END WARNING !!!! ===============\n");
 		goto update_done;
 	}
+
 	iterations[c_id]++;
 	consumer_time_ns[c_id] += time_diff_ns;
 	read_counters();
@@ -830,7 +840,6 @@ static void *consumer(void *arg)
 	setup_counters();
 	signal_consumer_active(c_id);
 	while (!stop) {
-
 		consumer_wait(c_id);
 		if (stop)
 			break;
