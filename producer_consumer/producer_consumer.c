@@ -516,6 +516,46 @@ unsigned int active_consumers;
 struct data_args producer_args, consumer_args[MAX_CONSUMERS];
 unsigned long *cur_random_access;
 unsigned long *idx_arr;
+
+static void producer_populate_cache(struct data_args *p)
+{
+	int i;
+	unsigned long idx_arr_size = p->idx_arr_size;
+	unsigned long data_arr_size = p->data_arr_size;
+	struct big_data *data_array = p->data_array;
+
+	if (precompute_random) {
+		int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
+
+		cur_random_access = random_indices[pattern];
+	} else {
+		cur_random_access = idx_arr;
+	}
+
+	debug_printf("Producer while begin\n");
+	/*
+	 * We will write to p->idx_array_size random locations
+	 * provided by cur_random_access.
+	 */
+	for (i = 0; i < idx_arr_size; i++) {
+		unsigned long idx;
+		unsigned long data;
+
+		if (precompute_random) {
+			idx = cur_random_access[i];
+			data = (idx << 2)  % UINT_MAX;
+		} else {
+			idx = random() % data_arr_size;
+			data = random() % UINT_MAX;
+			cur_random_access[i] = idx;
+		}
+
+		debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
+			     i, idx, idx, data);
+		data_array[idx].content = data;
+	}
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -564,36 +604,7 @@ static void *producer(void *arg)
 
 	while (!stop) {
 
-		if (precompute_random) {
-			int pattern = random() % NR_RANDOM_ACCESS_PATTERNS;
-
-			cur_random_access = random_indices[pattern];
-		} else {
-			cur_random_access = idx_arr;
-		}
-
-		debug_printf("Producer while begin\n");
-		/*
-		 * We will write to p->idx_array_size random locations provided
-		 * by cur_random_access. 
-		 */
-		for (i = 0; i < idx_arr_size; i++) {
-			unsigned long idx;
-			unsigned long data;
-
-			if (precompute_random) {
-				idx = cur_random_access[i];
-				data = (idx << 2)  % UINT_MAX;
-			} else {
-				idx = random() % data_arr_size;
-				data = random() % UINT_MAX;
-				cur_random_access[i] = idx;
-			}
-
-			debug_printf("Producer : [%d] = %ld,  [%ld] = 0x%llx\n",
-				i, idx, idx, data);
-			data_array[idx].content = data;
-		}
+		producer_populate_cache(p);
 
 		__atomic_store(&active_consumers, &nr_consumers, __ATOMIC_SEQ_CST);
 		debug_printf("Producer writing to pipe\n");
