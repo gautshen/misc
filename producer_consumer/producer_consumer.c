@@ -610,6 +610,43 @@ static void signal_consumer_active(int c_id)
 	__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST);
 }
 
+
+static void print_consumer_thread_details(int c_id)
+{
+	struct data_args *con = &consumer_args[c_id];
+	unsigned long idx_arr_size = con->idx_arr_size;
+	unsigned long data_arr_size = con->data_arr_size;
+	struct big_data *data_array = con->data_array;
+	pthread_t thread = pthread_self();
+        cpu_set_t *cpuset;
+	size_t size;
+	static int max_cpus = 2048;
+	pid_t my_pid = gettid();
+	char cpu_list_str[2048];
+
+	cpuset = CPU_ALLOC(max_cpus);
+	if (cpuset == NULL) {
+		printf("Unable to allocate cpuset\n");
+		exit(1);
+	}
+
+	size = CPU_ALLOC_SIZE(max_cpus);
+	CPU_ZERO_S(size, cpuset);
+
+	pthread_getaffinity_np(thread, size, cpuset);
+
+	cpuset_to_list(cpuset, cpu_list_str);
+	printf("Consumer(%d)[PID %d] affined to CPUs: %s\n", c_id, my_pid, cpu_list_str);
+
+	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
+		c_id, idx_arr_size, data_arr_size);
+	debug_printf("Consumer(%d) : data_array = 0x%llx\n",
+		c_id, data_array);
+
+	CPU_FREE(cpuset);
+}
+
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -787,38 +824,9 @@ static void consumer_fib_iterations(int c_id)
  */
 static void *consumer(void *arg)
 {
-	int i;
 	int c_id = *((int *)arg);
-	struct data_args *con = &consumer_args[c_id];
-	unsigned long idx_arr_size = con->idx_arr_size;
-	unsigned long data_arr_size = con->data_arr_size;
-	struct big_data *data_array = con->data_array;
-	pthread_t thread = pthread_self();
-        cpu_set_t *cpuset;
-	size_t size;
-	static int max_cpus = 2048;
-	pid_t my_pid = gettid();
-	char cpu_list_str[2048];
 
-	cpuset = CPU_ALLOC(max_cpus);
-	if (cpuset == NULL) {
-		printf("Unable to allocate cpuset\n");
-		exit(1);
-	}
-
-	size = CPU_ALLOC_SIZE(max_cpus);
-	CPU_ZERO_S(size, cpuset);
-
-	pthread_getaffinity_np(thread, size, cpuset);
-
-	cpuset_to_list(cpuset, cpu_list_str);
-	printf("Consumer(%d)[PID %d] affined to CPUs: %s\n", c_id, my_pid, cpu_list_str);
-
-	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
-		c_id, idx_arr_size, data_arr_size);
-	debug_printf("Consumer(%d) : data_array = 0x%llx\n",
-		c_id, data_array);
-
+	print_consumer_thread_details(c_id);
 	setup_counters();
 	signal_consumer_active(c_id);
 	while (!stop) {
@@ -834,7 +842,7 @@ static void *consumer(void *arg)
 
 	/* Wakeup the producer, just in case! */
 	wake_producer();
-	CPU_FREE(cpuset);
+
 	if (intermediate_stats)
 		print_consumer_stat(c_id);
 	return NULL;
