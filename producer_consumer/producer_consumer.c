@@ -39,7 +39,9 @@
 #define MAX_CONSUMERS 10
 
 #undef DEBUG
-#undef USE_L2_L3
+#define USE_L1
+#undef  USE_L2
+#undef  USE_L3
 
 #ifdef DEBUG
 #define debug_printf(fmt...)    printf(fmt)
@@ -68,13 +70,13 @@
 #endif
 
 #if defined(__PPC__)
-#define USE_L2_L3
+#undef USE_L1
+#define USE_L2
 /*
  * We will use the generic PERF_COUNT_HW_CACHE_REFERENCES for L1
  * references on POWER and PERF_COUNT_HW_CACHE_MISSES for L1 D cache
  * misses
  */
-
 #define PM_LD_REF_L1		0x100fc
 #define PM_LD_MISS_L1_FIN	0x2c04e
 
@@ -148,26 +150,33 @@ static void setup_counters(void)
 	 *
 	 * During initialization, we keep the group leader disabled.
 	 */
+#if defined(USE_L1)
 	cache_refs_fd = setup_counter("cache_refs", 1, PERF_TYPE_HARDWARE,
 				      PERF_COUNT_HW_CACHE_REFERENCES, -1);
 
 	cache_miss_fd = setup_counter("cache_miss", 0, PERF_TYPE_HARDWARE,
 				      PERF_COUNT_HW_CACHE_MISSES, cache_refs_fd);
-#if defined(USE_L2_L3)
+#endif
+
+#if defined(USE_L2)
 
 	l2_cache_hits_fd = setup_counter("l2_hits", 1, PERF_TYPE_RAW,
 					PM_DATA_FROM_L2, -1);
 	l2_cache_miss_fd = setup_counter("l2_miss", 0, PERF_TYPE_RAW,
 					PM_DATA_FROM_L2MISS, l2_cache_hits_fd);
+	printf("Using PM_DATA_FROM_L2 for L2 Hits = 0x%x\n",
+	       PM_DATA_FROM_L2);
+	printf("Using PM_DATA_FROM_L2MISS for L2-misses = 0x%x\n",
+	       PM_DATA_FROM_L2MISS);
+
+#endif
+
+#if defined (USE_L3)
 	l3_cache_hits_fd = setup_counter("l3_hits", 1, PERF_TYPE_RAW,
 					PM_DATA_FROM_L3, -1);
 
 	l3_cache_miss_fd = setup_counter("l3_miss", 0, PERF_TYPE_RAW,
 					PM_DATA_FROM_L3MISS, l3_cache_hits_fd);
-	printf("Using PM_DATA_FROM_L2 for L2 Hits = 0x%x\n",
-	       PM_DATA_FROM_L2);
-	printf("Using PM_DATA_FROM_L2MISS for L2-misses = 0x%x\n",
-	       PM_DATA_FROM_L2MISS);
 	printf("Using PM_DATA_FROM_L3 for L3 Hits = 0x%x\n",
 	       PM_DATA_FROM_L3);
 	printf("Using PM_DATA_FROM_L3MISS for L3-misses (0x%x)\n",
@@ -181,9 +190,15 @@ static void start_counters(void)
 	if (!verbose)
 		return;
 	/* Only need to start the group leader */
+#if defined(USE_L1)
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
-#if defined(USE_L2_L3)
+#endif
+
+#if defined(USE_L2)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
+#endif
+
+#if defined(USE_L3)
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
 #endif
 }
@@ -193,9 +208,15 @@ static void stop_counters(void)
 	if (!verbose)
 		return;
 	/* Only need to stop the group leader */
+#if defined(USE_L1)
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
-#if defined(USE_L2_L3)
+#endif
+
+#if defined(USE_L2)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
+#endif
+
+#if defined(USE_L3)
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
 #endif
 }
@@ -207,11 +228,15 @@ static void reset_counters(void)
 		return;
 
 	/* Reset all counters */
+#if defined(USE_L1)
 	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
 	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
-#if defined(USE_L2_L3)
+#endif
+#if defined(USE_L2)
 	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_RESET);
 	ioctl(l2_cache_miss_fd, PERF_EVENT_IOC_RESET);
+#endif
+#if defined(USE_L3)
 	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_RESET);
 	ioctl(l3_cache_miss_fd, PERF_EVENT_IOC_RESET);
 
@@ -267,13 +292,17 @@ static void read_counters(void)
 	if (!verbose)
 		return;
 
+#if defined(USE_L1)
 	read_and_add_counter(cache_refs_fd, &cache_refs_total);
 	read_and_add_counter(cache_miss_fd, &cache_miss_total);
+#endif
 
-#if defined(USE_L2_L3)
+#if defined(USE_L2)
 	read_and_add_counter(l2_cache_hits_fd, &l2_cache_hits_total);
 	read_and_add_counter(l2_cache_miss_fd, &l2_cache_miss_total);
+#endif
 
+#if defined(USE_L3)
 	read_and_add_counter(l3_cache_hits_fd, &l3_cache_hits_total);
 	read_and_add_counter(l3_cache_miss_fd, &l3_cache_miss_total);
 #endif
@@ -346,13 +375,19 @@ static void print_caches(unsigned long iter_diff)
 	if (!verbose)
 		return;
 
+#if defined(USE_L1)
 	print_cache_details("L1", &cache_refs_total, &cache_miss_total,
 			&cache_refs_total_prev, &cache_miss_total_prev,
 			iter_diff, reference);
-#if defined(USE_L2_L3)
+#endif
+
+#if defined(USE_L2)
 	print_cache_details("L2", &l2_cache_hits_total, &l2_cache_miss_total,
 			&l2_cache_hits_total_prev, &l2_cache_miss_total_prev,
 			iter_diff, hit);
+#endif
+
+#if defined(USE_L3)
 	print_cache_details("L3", &l3_cache_hits_total, &l3_cache_miss_total,
 			&l3_cache_hits_total_prev, &l3_cache_miss_total_prev,
 			iter_diff, hit);
@@ -1099,7 +1134,7 @@ int main(int argc, char *argv[])
 		}
 
 		if (verbose)
-			printf("Not enough memory for allocating an index array\n");
+			printf("idx_arr = 0x%llx\n", idx_arr);
 	}
 
 	data_arr = malloc(data_arr_size * sizeof(struct big_data));
