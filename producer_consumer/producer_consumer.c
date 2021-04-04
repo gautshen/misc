@@ -95,14 +95,14 @@ static inline int sys_perf_event_open(struct perf_event_attr *attr, pid_t pid,
 	return syscall(__NR_perf_event_open, attr, pid, cpu, group_fd, flags);
 }
 
-static int cache_refs_fd;
-static int cache_miss_fd;
+static int cache_refs_fd[MAX_CONSUMERS];
+static int cache_miss_fd[MAX_CONSUMERS];
 
-static int l2_cache_hits_fd;
-static int l2_cache_miss_fd;
+static int l2_cache_hits_fd[MAX_CONSUMERS];
+static int l2_cache_miss_fd[MAX_CONSUMERS];
 
-static int l3_cache_hits_fd;
-static int l3_cache_miss_fd;
+static int l3_cache_hits_fd[MAX_CONSUMERS];
+static int l3_cache_miss_fd[MAX_CONSUMERS];
 
 static int verbose = 0;
 static int setup_counter(const char *name,
@@ -137,7 +137,7 @@ static int setup_counter(const char *name,
 	return fd;
 }
 
-static void setup_counters(void)
+static void setup_counters(int c_id)
 {
 	if (!verbose)
 		return;
@@ -151,19 +151,20 @@ static void setup_counters(void)
 	 * During initialization, we keep the group leader disabled.
 	 */
 #if defined(USE_L1)
-	cache_refs_fd = setup_counter("cache_refs", 1, PERF_TYPE_HARDWARE,
+	cache_refs_fd[c_id] = setup_counter("cache_refs", 1, PERF_TYPE_HARDWARE,
 				      PERF_COUNT_HW_CACHE_REFERENCES, -1);
 
-	cache_miss_fd = setup_counter("cache_miss", 0, PERF_TYPE_HARDWARE,
-				      PERF_COUNT_HW_CACHE_MISSES, cache_refs_fd);
+	cache_miss_fd[c_id] = setup_counter("cache_miss", 0, PERF_TYPE_HARDWARE,
+					    PERF_COUNT_HW_CACHE_MISSES,
+					    cache_refs_fd[c_id]);
 #endif
 
 #if defined(USE_L2)
 
-	l2_cache_hits_fd = setup_counter("l2_hits", 1, PERF_TYPE_RAW,
+	l2_cache_hits_fd[c_id] = setup_counter("l2_hits", 1, PERF_TYPE_RAW,
 					PM_DATA_FROM_L2, -1);
-	l2_cache_miss_fd = setup_counter("l2_miss", 0, PERF_TYPE_RAW,
-					PM_DATA_FROM_L2MISS, l2_cache_hits_fd);
+	l2_cache_miss_fd[c_id] = setup_counter("l2_miss", 0, PERF_TYPE_RAW,
+					PM_DATA_FROM_L2MISS, l2_cache_hits_fd[c_id]);
 	printf("Using PM_DATA_FROM_L2 for L2 Hits = 0x%x\n",
 	       PM_DATA_FROM_L2);
 	printf("Using PM_DATA_FROM_L2MISS for L2-misses = 0x%x\n",
@@ -172,11 +173,11 @@ static void setup_counters(void)
 #endif
 
 #if defined (USE_L3)
-	l3_cache_hits_fd = setup_counter("l3_hits", 1, PERF_TYPE_RAW,
+	l3_cache_hits_fd[c_id] = setup_counter("l3_hits", 1, PERF_TYPE_RAW,
 					PM_DATA_FROM_L3, -1);
 
-	l3_cache_miss_fd = setup_counter("l3_miss", 0, PERF_TYPE_RAW,
-					PM_DATA_FROM_L3MISS, l3_cache_hits_fd);
+	l3_cache_miss_fd[c_id] = setup_counter("l3_miss", 0, PERF_TYPE_RAW,
+					PM_DATA_FROM_L3MISS, l3_cache_hits_fd[c_id]);
 	printf("Using PM_DATA_FROM_L3 for L3 Hits = 0x%x\n",
 	       PM_DATA_FROM_L3);
 	printf("Using PM_DATA_FROM_L3MISS for L3-misses (0x%x)\n",
@@ -185,43 +186,43 @@ static void setup_counters(void)
 
 }
 
-static void start_counters(void)
+static void start_counters(int c_id)
 {
 	if (!verbose)
 		return;
 	/* Only need to start the group leader */
 #if defined(USE_L1)
-	ioctl(cache_refs_fd, PERF_EVENT_IOC_ENABLE);
+	ioctl(cache_refs_fd[c_id], PERF_EVENT_IOC_ENABLE);
 #endif
 
 #if defined(USE_L2)
-	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
+	ioctl(l2_cache_hits_fd[c_id], PERF_EVENT_IOC_ENABLE);
 #endif
 
 #if defined(USE_L3)
-	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_ENABLE);
+	ioctl(l3_cache_hits_fd[c_id], PERF_EVENT_IOC_ENABLE);
 #endif
 }
 
-static void stop_counters(void)
+static void stop_counters(int c_id)
 {
 	if (!verbose)
 		return;
 	/* Only need to stop the group leader */
 #if defined(USE_L1)
-	ioctl(cache_refs_fd, PERF_EVENT_IOC_DISABLE);
+	ioctl(cache_refs_fd[c_id], PERF_EVENT_IOC_DISABLE);
 #endif
 
 #if defined(USE_L2)
-	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
+	ioctl(l2_cache_hits_fd[c_id], PERF_EVENT_IOC_DISABLE);
 #endif
 
 #if defined(USE_L3)
-	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_DISABLE);
+	ioctl(l3_cache_hits_fd[c_id], PERF_EVENT_IOC_DISABLE);
 #endif
 }
 
-static void reset_counters(void)
+static void reset_counters(int c_id)
 {
 
 	if (!verbose)
@@ -229,16 +230,16 @@ static void reset_counters(void)
 
 	/* Reset all counters */
 #if defined(USE_L1)
-	ioctl(cache_refs_fd, PERF_EVENT_IOC_RESET);
-	ioctl(cache_miss_fd, PERF_EVENT_IOC_RESET);
+	ioctl(cache_refs_fd[c_id], PERF_EVENT_IOC_RESET);
+	ioctl(cache_miss_fd[c_id], PERF_EVENT_IOC_RESET);
 #endif
 #if defined(USE_L2)
-	ioctl(l2_cache_hits_fd, PERF_EVENT_IOC_RESET);
-	ioctl(l2_cache_miss_fd, PERF_EVENT_IOC_RESET);
+	ioctl(l2_cache_hits_fd[c_id], PERF_EVENT_IOC_RESET);
+	ioctl(l2_cache_miss_fd[c_id], PERF_EVENT_IOC_RESET);
 #endif
 #if defined(USE_L3)
-	ioctl(l3_cache_hits_fd, PERF_EVENT_IOC_RESET);
-	ioctl(l3_cache_miss_fd, PERF_EVENT_IOC_RESET);
+	ioctl(l3_cache_hits_fd[c_id], PERF_EVENT_IOC_RESET);
+	ioctl(l3_cache_miss_fd[c_id], PERF_EVENT_IOC_RESET);
 
 #endif
 }
@@ -257,23 +258,23 @@ unsigned long max_fib_iterations = 0;
 unsigned long long consumer_fib_ns[MAX_CONSUMERS];
 unsigned long long consumer_fib_ns_prev[MAX_CONSUMERS];
 
-unsigned long long cache_refs_total;
-unsigned long long cache_refs_total_prev;
+unsigned long long cache_refs_total[MAX_CONSUMERS];
+unsigned long long cache_refs_total_prev[MAX_CONSUMERS];
 
-unsigned long long cache_miss_total;
-unsigned long long cache_miss_total_prev;
+unsigned long long cache_miss_total[MAX_CONSUMERS];
+unsigned long long cache_miss_total_prev[MAX_CONSUMERS];
 
-unsigned long long l2_cache_hits_total;
-unsigned long long l2_cache_hits_total_prev;
+unsigned long long l2_cache_hits_total[MAX_CONSUMERS];
+unsigned long long l2_cache_hits_total_prev[MAX_CONSUMERS];
 
-unsigned long long l2_cache_miss_total;
-unsigned long long l2_cache_miss_total_prev;
+unsigned long long l2_cache_miss_total[MAX_CONSUMERS];
+unsigned long long l2_cache_miss_total_prev[MAX_CONSUMERS];
 
-unsigned long long l3_cache_hits_total;
-unsigned long long l3_cache_hits_total_prev;
+unsigned long long l3_cache_hits_total[MAX_CONSUMERS];
+unsigned long long l3_cache_hits_total_prev[MAX_CONSUMERS];
 
-unsigned long long l3_cache_miss_total;
-unsigned long long l3_cache_miss_total_prev;
+unsigned long long l3_cache_miss_total[MAX_CONSUMERS];
+unsigned long long l3_cache_miss_total_prev[MAX_CONSUMERS];
 
 static void read_and_add_counter(unsigned int fd, unsigned long long *acc)
 {
@@ -286,25 +287,25 @@ static void read_and_add_counter(unsigned int fd, unsigned long long *acc)
 	*acc += counter;
 }
 
-static void read_counters(void)
+static void read_counters(int c_id)
 {
 
 	if (!verbose)
 		return;
 
 #if defined(USE_L1)
-	read_and_add_counter(cache_refs_fd, &cache_refs_total);
-	read_and_add_counter(cache_miss_fd, &cache_miss_total);
+	read_and_add_counter(cache_refs_fd[c_id], &cache_refs_total[c_id]);
+	read_and_add_counter(cache_miss_fd[c_id], &cache_miss_total[c_id]);
 #endif
 
 #if defined(USE_L2)
-	read_and_add_counter(l2_cache_hits_fd, &l2_cache_hits_total);
-	read_and_add_counter(l2_cache_miss_fd, &l2_cache_miss_total);
+	read_and_add_counter(l2_cache_hits_fd[c_id], &l2_cache_hits_total);
+	read_and_add_counter(l2_cache_miss_fd[c_id], &l2_cache_miss_total);
 #endif
 
 #if defined(USE_L3)
-	read_and_add_counter(l3_cache_hits_fd, &l3_cache_hits_total);
-	read_and_add_counter(l3_cache_miss_fd, &l3_cache_miss_total);
+	read_and_add_counter(l3_cache_hits_fd[c_id], &l3_cache_hits_total);
+	read_and_add_counter(l3_cache_miss_fd[c_id], &l3_cache_miss_total);
 #endif
 }
 
@@ -370,26 +371,30 @@ static void print_cache_details(const char *name,
 	*miss_prev = cur_miss;
 }
 
-static void print_caches(unsigned long iter_diff)
+static void print_caches(int c_id, unsigned long iter_diff)
 {
 	if (!verbose)
 		return;
 
 #if defined(USE_L1)
-	print_cache_details("L1", &cache_refs_total, &cache_miss_total,
-			&cache_refs_total_prev, &cache_miss_total_prev,
+	print_cache_details("L1", &cache_refs_total[c_id], &cache_miss_total[c_id],
+			&cache_refs_total_prev[c_id], &cache_miss_total_prev[c_id],
 			iter_diff, reference);
 #endif
 
 #if defined(USE_L2)
-	print_cache_details("L2", &l2_cache_hits_total, &l2_cache_miss_total,
-			&l2_cache_hits_total_prev, &l2_cache_miss_total_prev,
+	print_cache_details("L2", &l2_cache_hits_total[c_id],
+			&l2_cache_miss_total[c_id],
+			&l2_cache_hits_total_prev[c_id],
+			&l2_cache_miss_total_prev[c_id],
 			iter_diff, hit);
 #endif
 
 #if defined(USE_L3)
-	print_cache_details("L3", &l3_cache_hits_total, &l3_cache_miss_total,
-			&l3_cache_hits_total_prev, &l3_cache_miss_total_prev,
+	print_cache_details("L3", &l3_cache_hits_total[c_id],
+			&l3_cache_miss_total[c_id],
+			&l3_cache_hits_total_prev[c_id],
+			&l3_cache_miss_total_prev[c_id],
 			iter_diff, hit);
 #endif
 }
@@ -474,7 +479,7 @@ static void print_consumer_stat(int id)
 
 	printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
 		id, iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
-	print_caches(iter_diff);
+	print_caches(id, iter_diff);
 
 
 	iterations_prev[id] = i;
@@ -797,7 +802,7 @@ static void consumer_load_from_cache(int c_id)
 	debug_printf("Consumer(%d) idx_arr_size = %ld\n", c_id, idx_arr_size);
 
 	clock_gettime(clockid, &begin);
-	start_counters();
+	start_counters(c_id);
 	for (i = 0; i < idx_arr_size; i++) {
 		unsigned long idx;
 		unsigned long data;
@@ -809,7 +814,7 @@ static void consumer_load_from_cache(int c_id)
 			c_id, i, idx, idx, data);
 		sum = (sum + data) % INT_MAX;
 	}
-	stop_counters();
+	stop_counters(c_id);
 	clock_gettime(clockid, &end);
 
 	time_diff_ns = compute_timediff(begin, end);
@@ -826,9 +831,9 @@ static void consumer_load_from_cache(int c_id)
 
 	iterations[c_id]++;
 	consumer_time_ns[c_id] += time_diff_ns;
-	read_counters();
+	read_counters(c_id);
 update_done:
-	reset_counters();
+	reset_counters(c_id);
 	idx = 0;
 	debug_printf("Consumer(%d) writing [%ld] = 0x%llx\n", c_id, idx, sum);
 	data_array[idx].content = sum;
@@ -872,7 +877,7 @@ static void *consumer(void *arg)
 	int c_id = *((int *)arg);
 
 	print_consumer_thread_details(c_id);
-	setup_counters();
+	setup_counters(c_id);
 	signal_consumer_active(c_id);
 	while (!stop) {
 		consumer_wait(c_id);
