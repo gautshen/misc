@@ -299,13 +299,13 @@ static void read_counters(int c_id)
 #endif
 
 #if defined(USE_L2)
-	read_and_add_counter(l2_cache_hits_fd[c_id], &l2_cache_hits_total);
-	read_and_add_counter(l2_cache_miss_fd[c_id], &l2_cache_miss_total);
+	read_and_add_counter(l2_cache_hits_fd[c_id], &l2_cache_hits_total[c_id]);
+	read_and_add_counter(l2_cache_miss_fd[c_id], &l2_cache_miss_total[c_id]);
 #endif
 
 #if defined(USE_L3)
-	read_and_add_counter(l3_cache_hits_fd[c_id], &l3_cache_hits_total);
-	read_and_add_counter(l3_cache_miss_fd[c_id], &l3_cache_miss_total);
+	read_and_add_counter(l3_cache_hits_fd[c_id], &l3_cache_hits_total[c_id]);
+	read_and_add_counter(l3_cache_miss_fd[c_id], &l3_cache_miss_total[c_id]);
 #endif
 }
 
