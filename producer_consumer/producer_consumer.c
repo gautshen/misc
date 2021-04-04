@@ -567,6 +567,13 @@ static void wake_all_consumers(void)
 	}
 }
 
+static void producer_wait(void)
+{
+	debug_printf("Producer waiting\n");
+	assert(read(pipe_fd_producer[READ], &pipec, 1) == 1);
+	debug_printf("Producer read from pipe\n");
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -617,9 +624,7 @@ static void *producer(void *arg)
 
 		producer_populate_cache(p);
 		wake_all_consumers();
-		debug_printf("Producer waiting\n");
-		assert(read(pipe_fd_producer[READ], &pipec, 1) == 1);
-		debug_printf("Producer read from pipe\n");
+		producer_wait();
 	}
 
 	/* Wakeup the consumer, just in case! */
