@@ -724,6 +724,34 @@ update_done:
 	data_array[idx].content = sum;
 }
 
+
+static void consumer_fib_iterations(int c_id)
+{
+	int i;
+	struct data_args *con = &consumer_args[c_id];
+	struct big_data *data_array = con->data_array;
+	struct timespec begin, end;
+	unsigned long long time_diff_ns;
+	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
+	int a = 0, b = 1 , c;
+
+	if (!max_fib_iterations)
+		return;
+
+	clock_gettime(clockid, &begin);
+	for (i = 0; i < max_fib_iterations; i++) {
+		c = a + b;
+		a = b;
+		b = c;
+	}
+
+	clock_gettime(clockid, &end);
+	time_diff_ns = compute_timediff(begin, end);
+	fib_iterations[c_id]++;
+	consumer_fib_ns[c_id] += time_diff_ns;
+	data_array[c_id].content = c;
+}
+
 /*
  * Consumer function : Performs idx_arr_size number of loads from the
  * locations in data_array. These were the ones that producer had
@@ -766,12 +794,6 @@ static void *consumer(void *arg)
 	setup_counters();
 	__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST);
 	while (!stop) {
-		unsigned long idx = 0;
-		volatile unsigned int sum = 0;
-		struct timespec begin, end;
-		unsigned long long time_diff_ns;
-		const unsigned long long ns_per_msec = 1000*1000;
-		clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 
 		consumer_wait(c_id);
 		if (stop)
@@ -783,22 +805,8 @@ static void *consumer(void *arg)
 		    (iterations[c_id] - iterations_prev[c_id] == 5000))
 			print_consumer_stat(c_id);
 
-		if (max_fib_iterations) {
-			int i;
-			int a = 0, b = 1 , c;
 
-			clock_gettime(clockid, &begin);
-			for (i = 0; i < max_fib_iterations; i++) {
-				c = a + b;
-				a = b;
-				b = c;
-			}
-			clock_gettime(clockid, &end);
-			time_diff_ns = compute_timediff(begin, end);
-			fib_iterations[c_id]++;
-			consumer_fib_ns[c_id] += time_diff_ns;
-			data_array[idx].content = c;
-		}
+		consumer_fib_iterations(c_id);
 
 		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
 			debug_printf("Consumer(%d) writing to pipe\n", c_id);
