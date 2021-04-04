@@ -582,6 +582,28 @@ static void consumer_wait(int c_id)
 
 }
 
+static void wake_producer(void)
+{
+	assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
+}
+
+static void test_and_wake_producer(int c_id)
+{
+	if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {
+		//Last active consumer
+		debug_printf("Consumer(%d) writing to pipe\n", c_id);
+		wake_producer();
+	}
+}
+
+
+static void print_intermediate_stats(int c_id)
+{
+	if (intermediate_stats &&
+	    (iterations[c_id] - iterations_prev[c_id] == 5000))
+		print_consumer_stat(c_id);
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -798,24 +820,14 @@ static void *consumer(void *arg)
 		consumer_wait(c_id);
 		if (stop)
 			break;
-
 		consumer_load_from_cache(c_id);
-
-		if (intermediate_stats &&
-		    (iterations[c_id] - iterations_prev[c_id] == 5000))
-			print_consumer_stat(c_id);
-
-
+		print_intermediate_stats(c_id);
 		consumer_fib_iterations(c_id);
-
-		if (__atomic_sub_fetch(&active_consumers, 1, __ATOMIC_SEQ_CST) == 0) {//Last active consumer
-			debug_printf("Consumer(%d) writing to pipe\n", c_id);
-			assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
-		}
+		test_and_wake_producer(c_id);
 	}
 
 	/* Wakeup the producer, just in case! */
-	assert(write(pipe_fd_producer[WRITE], &pipec, 1) == 1);
+	wake_producer();
 	CPU_FREE(cpuset);
 	if (intermediate_stats)
 		print_consumer_stat(c_id);
