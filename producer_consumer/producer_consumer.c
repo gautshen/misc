@@ -105,6 +105,7 @@ static int l3_cache_hits_fd[MAX_CONSUMERS];
 static int l3_cache_miss_fd[MAX_CONSUMERS];
 
 static int verbose = 0;
+static int print_cache_stats = 0;
 static int setup_counter(const char *name,
 			 unsigned char disabled,
 			 unsigned int type,
@@ -139,7 +140,7 @@ static int setup_counter(const char *name,
 
 static void setup_counters(int c_id)
 {
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 
 	/*
@@ -188,7 +189,7 @@ static void setup_counters(int c_id)
 
 static void start_counters(int c_id)
 {
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 	/* Only need to start the group leader */
 #if defined(USE_L1)
@@ -206,7 +207,7 @@ static void start_counters(int c_id)
 
 static void stop_counters(int c_id)
 {
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 	/* Only need to stop the group leader */
 #if defined(USE_L1)
@@ -225,7 +226,7 @@ static void stop_counters(int c_id)
 static void reset_counters(int c_id)
 {
 
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 
 	/* Reset all counters */
@@ -290,7 +291,7 @@ static void read_and_add_counter(unsigned int fd, unsigned long long *acc)
 static void read_counters(int c_id)
 {
 
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 
 #if defined(USE_L1)
@@ -317,7 +318,7 @@ enum access_type{
 	miss,
 };
 
-static void print_cache_details(const char *name,
+static void print_cache_details(int c_id, const char *name,
 				unsigned long long *hit_ref,
 				unsigned long long *miss,
 				unsigned long long *hit_ref_prev,
@@ -360,7 +361,7 @@ static void print_cache_details(const char *name,
 	if (pct_denominator)
 		cache_miss_pct = ((float)miss_diff * 100)/pct_denominator;
 
-	printf("%s: avg cache-%s: %6lld, avg cache-misses: %6lld, cache-miss rate: %3.2f percentage\n", name, ref_hit_str, avg_hit_ref_diff,
+	printf("Consumer %d: %s: avg cache-%s: %6lld, avg cache-misses: %6lld, cache-miss rate: %3.2f percentage\n", c_id, name, ref_hit_str, avg_hit_ref_diff,
 		avg_miss_diff, cache_miss_pct);
 
 	/*
@@ -373,17 +374,17 @@ static void print_cache_details(const char *name,
 
 static void print_caches(int c_id, unsigned long iter_diff)
 {
-	if (!verbose)
+	if (!print_cache_stats)
 		return;
 
 #if defined(USE_L1)
-	print_cache_details("L1", &cache_refs_total[c_id], &cache_miss_total[c_id],
+	print_cache_details(c_id, "L1", &cache_refs_total[c_id], &cache_miss_total[c_id],
 			&cache_refs_total_prev[c_id], &cache_miss_total_prev[c_id],
 			iter_diff, reference);
 #endif
 
 #if defined(USE_L2)
-	print_cache_details("L2", &l2_cache_hits_total[c_id],
+	print_cache_details(c_id, "L2", &l2_cache_hits_total[c_id],
 			&l2_cache_miss_total[c_id],
 			&l2_cache_hits_total_prev[c_id],
 			&l2_cache_miss_total_prev[c_id],
@@ -391,7 +392,7 @@ static void print_caches(int c_id, unsigned long iter_diff)
 #endif
 
 #if defined(USE_L3)
-	print_cache_details("L3", &l3_cache_hits_total[c_id],
+	print_cache_details(c_id, "L3", &l3_cache_hits_total[c_id],
 			&l3_cache_miss_total[c_id],
 			&l3_cache_hits_total_prev[c_id],
 			&l3_cache_miss_total_prev[c_id],
@@ -477,9 +478,13 @@ static void print_consumer_stat(int id)
 
 	avg_access_time_ns = avg_time_ns/idx_arr_size;
 
-	printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
+	if (print_cache_stats) {
+		print_caches(id, iter_diff);
+	} else {
+		printf("Consumer(%d) : %8ld iterations of length %d load ops. avg time/iteration:%6lld ns (avg time/access: %3lld ns)\n",
 		id, iter_diff, idx_arr_size, avg_time_ns, avg_access_time_ns);
-	print_caches(id, iter_diff);
+	}
+
 
 
 	iterations_prev[id] = i;
@@ -916,7 +921,8 @@ void print_usage(int argc, char *argv[])
 	printf("-s, --cache-size\t\t Size of the cache in bytes.\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
 	printf("-f, --fib\t\t\t  The number of fibonacci numbers to compute by the consumer\n");
-	printf("    --verbose\t\t\t Also print the cache-access statistics\n");
+	printf("    --print-cache-stats\t\t Print cache-access statistics\n");
+	printf("    --verbose\t\t\t Print all data\n");
 	printf("    --precompute-random\t\t\t Precompute the random-access pattern\n");
 	printf("    --intermediate-stats\t\t\t Print consumer stats every 5000 iterations\n");
 
@@ -932,6 +938,7 @@ void parse_args(int argc, char *argv[])
 
 	while(1) {
 		static struct option long_options[] = {
+			{"print-cache-stats", no_argument, &print_cache_stats, 1},
 			{"verbose", no_argument, &verbose, 1},
 			{"pcpu", required_argument, 0, 'p'},
 			{"ccpu", required_argument, 0, 'c'},
