@@ -556,6 +556,17 @@ static void producer_populate_cache(struct data_args *p)
 	}
 }
 
+static void wake_all_consumers(void)
+{
+	int i;
+
+	__atomic_store(&active_consumers, &nr_consumers, __ATOMIC_SEQ_CST);
+	debug_printf("Producer writing to pipe\n");
+	for (i = 0; i < nr_consumers; i++) {
+		assert(write(pipe_fd_consumer[i][WRITE], &pipec, 1) == 1);
+	}
+}
+
 /*
  * Producer function : Performs idx_arr_size number of stores to
  * random locations in the data_array.  These locations are recorded
@@ -605,13 +616,7 @@ static void *producer(void *arg)
 	while (!stop) {
 
 		producer_populate_cache(p);
-
-		__atomic_store(&active_consumers, &nr_consumers, __ATOMIC_SEQ_CST);
-		debug_printf("Producer writing to pipe\n");
-		for (i = 0; i < nr_consumers; i++) {
-			assert(write(pipe_fd_consumer[i][WRITE], &pipec, 1) == 1);
-		}
-
+		wake_all_consumers();
 		debug_printf("Producer waiting\n");
 		assert(read(pipe_fd_producer[READ], &pipec, 1) == 1);
 		debug_printf("Producer read from pipe\n");
