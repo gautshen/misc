@@ -514,7 +514,7 @@ static void sigalrm_handler(int junk)
  *
  * WARNING: Hasn't been extensively tested.
  */
-static void cpuset_to_list(cpu_set_t *cpuset, char *str)
+static void cpuset_to_list(cpu_set_t *cpuset, int size, char *str)
 {
 	int start = -1;
 	int end = -2;
@@ -523,7 +523,7 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 
 	for (i = 0; i < max_cpus; i++) {
 		cur = i;
-		if (CPU_ISSET(i, cpuset)) {
+		if (CPU_ISSET_S(i, size, cpuset)) {
 			if (end != cur - 1) /* New streak */
 				start = cur;
 			end = cur;
@@ -540,7 +540,7 @@ static void cpuset_to_list(cpu_set_t *cpuset, char *str)
 
 	}
 
-	if (end == CPU_SETSIZE - 1) {
+	if (end == size - 1) {
 		int len;
 		/* Streak has ended. Print the last streak */
 		if (start == end)
@@ -676,9 +676,8 @@ static void print_consumer_thread_details(int c_id)
 
 	pthread_getaffinity_np(thread, size, cpuset);
 
-	cpuset_to_list(cpuset, cpu_list_str);
+	cpuset_to_list(cpuset, size, cpu_list_str);
 	printf("Consumer(%d)[PID %d] affined to CPUs: %s\n", c_id, my_pid, cpu_list_str);
-
 	debug_printf("Consumer(%d) : idx_array_size = %ld,  data_array_size = %ld\n",
 		c_id, idx_arr_size, data_arr_size);
 	debug_printf("Consumer(%d) : data_array = 0x%llx\n",
@@ -711,7 +710,7 @@ static void print_producer_thread_details(struct data_args *p)
 
 	pthread_getaffinity_np(thread, size, cpuset);
 
-	cpuset_to_list(cpuset, cpu_list_str);
+	cpuset_to_list(cpuset, size, cpu_list_str);
 	printf("Producer[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
 
 	debug_printf("Producer : idx_array_size = %ld,  data_array_size = %ld\n",
@@ -1035,6 +1034,7 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 	static int max_cpus = 2048;
 	struct data_args *args;
 	void *thread_args = (void *)consumer_id;
+	char cpulist[5000];
 
 	if (*consumer_id == -1)
 		args = &producer_args;
@@ -1056,6 +1056,14 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 		size = CPU_ALLOC_SIZE(max_cpus);
 		CPU_ZERO_S(size, cpuset);
 		CPU_SET_S(cpu, size, cpuset);
+		cpuset_to_list(cpuset, size, cpulist);
+		if (*consumer_id == -1)
+			printf("Producer will be affined to CPU %s\n",
+				cpulist);
+		else
+			printf("Consumer[%d] will be affined to CPUs %s\n",
+				*consumer_id, cpulist);
+
 		if (pthread_attr_setaffinity_np(attr,
 						size,
 						cpuset)) {
