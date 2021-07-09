@@ -121,6 +121,9 @@ struct wakeup_time t0_wakeup_time;
 unsigned long long t0_wakeup_time_total_ns;
 unsigned long long t1_wakeup_time_total_ns;
 
+unsigned long long t0_runtime_total_ns;
+unsigned long long t1_runtime_total_ns;
+
 unsigned long long t0_wakeup_count;
 unsigned long long t1_wakeup_count;
 
@@ -271,7 +274,8 @@ static void thread0_fib_iterations(void)
 			break;
 
 	}
-	
+
+	t0_runtime_total_ns += time_diff_ns;
 }
 
 unsigned long timeout = 5;
@@ -297,7 +301,7 @@ static void thread1_fib_iterations(void)
 {
 	int i;
 	struct timespec begin, end;
-	unsigned long long time_diff_ns;
+	unsigned long long time_diff_ns = 0;
 	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	int a = 0, b = 1 , c;
 
@@ -317,6 +321,8 @@ static void thread1_fib_iterations(void)
 			break;
 
 	}
+
+	t1_runtime_total_ns += time_diff_ns;
 	
 }
 
@@ -482,6 +488,11 @@ int main(int argc, char *argv[])
 	int i;
 	double t0_avg_wakeup_time_ns;
 	double t1_avg_wakeup_time_ns;
+	unsigned long long total_ops;
+	unsigned long long total_runtime_ns;
+	double ops_per_second;
+	unsigned long long total_wakeup_time_ns;
+	unsigned long long total_wakeup_count;
 
 
 	parse_args(argc, argv);
@@ -531,13 +542,22 @@ int main(int argc, char *argv[])
 	debug_printf("Avg Thread1 wakeup latency = %4.2f us\n",
 		t1_avg_wakeup_time_ns/1000);
 
-	printf("fib_iteration duration to %lld us\n",
+	printf("Per runtime duration   = %lld us\n",
 		max_fib_iteration_ns/1000);
-	
-	printf("Total number of operations = %4.3f Million ops/seconds\n",
-		(t0_total_fib_count + t1_total_fib_count)/(timeout * 1000000.0));
+
+	total_ops = t0_total_fib_count 	+ t1_total_fib_count;
+	total_runtime_ns = t0_runtime_total_ns + t1_runtime_total_ns;
+	ops_per_second = ((double)total_ops * 1000000000ULL)/total_runtime_ns;
+
+	printf("Total operations       = %f Mops\n", (double)total_ops/1000000);
+	printf("Total run time         = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
+	printf("Throughput             = %4.3f Mops/seconds\n",
+		ops_per_second/1000000);
+
+	total_wakeup_time_ns = t0_wakeup_time_total_ns + t1_wakeup_time_total_ns;
+	total_wakeup_count = t0_wakeup_count + t1_wakeup_count;
 	printf("Average wakeup latency = %4.3f us\n",
-		((double)(t0_wakeup_time_total_ns + t1_wakeup_time_total_ns)/((t0_wakeup_count + t1_wakeup_count)*1000)));
+		((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)));
 		
 	printf("===============================================\n");
 	pthread_attr_destroy(&thread0_attr);
