@@ -567,8 +567,8 @@ int main(int argc, char *argv[])
 
 	ops_per_second = ((double)total_ops * 1000000000ULL)/total_runtime_ns;
 
-	printf("Total operations        = %f Mops\n", (double)total_ops/1000000);
-	printf("Total run time          = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
+	debug_printf("Total operations        = %f Mops\n", (double)total_ops/1000000);
+	debug_printf("Total run time          = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
 	printf("Throughput              = %4.3f Mops/seconds\n",
 		ops_per_second/1000000);
 
