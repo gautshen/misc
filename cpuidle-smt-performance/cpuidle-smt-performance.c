@@ -32,6 +32,7 @@
 #include <sys/shm.h>
 #include <linux/futex.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 
 
 #define gettid()  syscall(SYS_gettid)
@@ -162,6 +163,44 @@ static unsigned long long compute_timediff(struct timespec before,
 }
 
 
+#define UNAVAILABLE    0
+#define AVAILABLE      1
+
+int irritator_futex = UNAVAILABLE;
+static int futex(int *uaddr, int futex_op, int val,
+                 const struct timespec *timeout, int *uaddr2, int val3)
+{
+	return syscall(SYS_futex, uaddr, futex_op, val,
+                       timeout, uaddr, val3);
+}
+
+static void fwait(int *futexp)
+{
+	int s;
+	while (1) {
+		if (__sync_bool_compare_and_swap(futexp, AVAILABLE, UNAVAILABLE))
+			break; /* We have been wokenup */
+
+		s = futex(futexp, FUTEX_WAIT_PRIVATE, UNAVAILABLE, NULL, NULL, 0);
+		if (s == -1 && errno != EAGAIN) {
+			printf("Error futex wait\n");
+			exit(1);
+		}
+	}
+}
+
+static void fpost(int *futexp)
+{
+	if (__sync_bool_compare_and_swap(futexp, UNAVAILABLE, AVAILABLE)) {
+		int s = futex(futexp, FUTEX_WAKE_PRIVATE, AVAILABLE, NULL, NULL, 0);
+		if (s == -1) {
+			printf("Error futex wake\n");
+			exit(1);
+
+		}
+	}
+}
+
 static void wake_all_irritators(void)
 {
 	int i;
@@ -176,14 +215,16 @@ static void wake_all_irritators(void)
 static void irritator_wait(int id)
 {
 	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
+	unsigned long long diff;
 
 	debug_printf("Irritator %d waiting\n", id);
 	assert(read(pipe_fd_irritator[id][READ], &pipec, 1) == 1);
 	clock_gettime(clockid, &(irritator_wakeup_time[id].end));
-	irritator_wakeup_time_total_ns[id] +=
-		compute_timediff(irritator_wakeup_time[id].begin,
+	diff = compute_timediff(irritator_wakeup_time[id].begin,
 				 irritator_wakeup_time[id].end);
-	debug_printf("Irritator %d wokeup\n", id);
+	irritator_wakeup_time_total_ns[id] += diff;
+	debug_printf("Irritator %d wokeup. latency = %lld ns\n", id,
+		     diff);
 	irritator_wakeup_count[id]++;
 }
 
@@ -238,7 +279,7 @@ static void print_workload_thread_details(void)
 	CPU_FREE(cpuset);
 }
 
-#define FIB_ITER_COUNT 5000
+#define FIB_ITER_COUNT 128
 int fib_vals[FIB_ITER_COUNT];
 
 static void prep_fib_val_array(void)
