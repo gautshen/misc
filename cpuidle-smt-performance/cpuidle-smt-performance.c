@@ -132,6 +132,8 @@ unsigned long long t1_runtime_total_ns[MAX_IRRITATORS];
 unsigned long long t0_wakeup_count;
 unsigned long long irritator_wakeup_count[MAX_IRRITATORS];
 
+int clockid = CLOCK_REALTIME;
+//int clockid = CLOCK_MONOTONIC_RAW;
 /*
  * Helper function to compute the difference between two timespec
  * structures.  The return value is in nanoseconds.
@@ -204,7 +206,6 @@ static void fpost(int *futexp)
 static void wake_all_irritators(void)
 {
 	int i;
-	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	for (i = 0; i < nr_irritators; i++) {
 		clock_gettime(clockid, &irritator_wakeup_time[i].begin);
 		debug_printf("Workload writing to Irritator %d pipe\n", i);
@@ -214,7 +215,6 @@ static void wake_all_irritators(void)
 
 static void irritator_wait(int id)
 {
-	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	unsigned long long diff;
 
 	debug_printf("Irritator %d waiting\n", id);
@@ -293,7 +293,6 @@ static void workload_fib_iterations(void)
 	int i;
 	struct timespec begin, end;
 	unsigned long long time_diff_ns;
-	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	int a = 0, b = 1 , c;
 
 	clock_gettime(clockid, &begin);
@@ -340,7 +339,6 @@ static void irritator_fib_iterations(void)
 	int i;
 	struct timespec begin, end;
 	unsigned long long time_diff_ns = 0;
-	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	int a = 0, b = 1 , c;
 
 	for (i = 0; i < 1; i++) {
@@ -355,7 +353,7 @@ static void *irritator_fn(void *arg)
 	int c_id = *((int *)arg);
 
 	print_irritator_thread_details();
-	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;	
+
 	while (!stop) {
 		irritator_wait(c_id);
 		if (stop)
