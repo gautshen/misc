@@ -532,11 +532,12 @@ int main(int argc, char *argv[])
 		ops_per_second/1000000);
 
 	for (i = 0; i < nr_irritators; i++) {
-		total_wakeup_time_ns += irritator_wakeup_time_total_ns[i];
-		total_wakeup_count += irritator_wakeup_count[i];
+		total_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
+		total_wakeup_count = irritator_wakeup_count[i];
+		printf("Irritator %d average wakeup latency  = %4.3f us\n",
+			i, total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
+		
 	}
-	printf("Average wakeup latency  = %4.3f us\n",
-		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
 		
 	printf("===============================================\n");
 	pthread_attr_destroy(&workload_attr);
