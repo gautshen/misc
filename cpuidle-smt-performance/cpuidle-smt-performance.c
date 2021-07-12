@@ -343,7 +343,7 @@ static void irritator_fib_iterations(void)
 	clockid_t clockid  = CLOCK_MONOTONIC_RAW; //CLOCK_THREAD_CPUTIME_ID;
 	int a = 0, b = 1 , c;
 
-	for (i = 0; i < 10; i++) {
+	for (i = 0; i < 1; i++) {
 		c = a + b;
 		a = b;
 		b = c;
