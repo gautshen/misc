@@ -33,6 +33,7 @@
 #include <linux/futex.h>
 #include <sys/ioctl.h>
 #include <errno.h>
+#include <dirent.h>
 
 
 #define gettid()  syscall(SYS_gettid)
@@ -46,16 +47,186 @@
 #define debug_printf(fmt...)
 #endif
 
+
+const char *cpuidle_path = "/sys/devices/system/cpu/cpu%d/cpuidle";
+const char *cpuidle_state_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/";
+const char *cpuidle_state_name_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/name";
+const char *cpuidle_state_usage_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/usage";
+const char *cpuidle_state_time_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/time";
+
+
 unsigned char stop = 0;
 
 #define READ 0
 #define WRITE 1
 
 #define MAX_IRRITATORS  7
+int cpu_workload = 0;
+int cpu_irritator[MAX_IRRITATORS] = {-1};
+
+struct idle_state {
+	int cpu;
+	int state;
+	char name[50];
+	unsigned long long usage_before;
+	unsigned long long time_before;
+	unsigned long long usage_after;
+	unsigned long long time_after;
+};
+
+unsigned int get_nr_idle_states(void)
+{
+	char parent[100];
+	int parent_fd;
+	DIR *parentdir;
+	struct dirent *entry;
+	int ret = 0;
+
+	sprintf(parent, cpuidle_path, 0);
+
+	parentdir = opendir(parent);
+	if (!parentdir)
+		return 0;
+
+	while (entry = readdir(parentdir)) {
+		if (!strncmp(entry->d_name, ".", 1))
+			continue;
+		if (!strncmp(entry->d_name, "..", 2))
+			continue;
+	        ret++;
+	}
+
+	return ret;
+}
+
+void get_cpu_idle_state_name(int cpu, int state, char *name)
+{
+	char path[100];
+	FILE *fp;
+
+	sprintf(path, cpuidle_state_name_path, cpu, state);
+
+	fp = fopen((const char *)path, "r");
+	if (!fp)
+		name[0] = '\0';
+	else
+		fscanf(fp, "%s", name);
+}
+
+void get_cpu_idle_state_usage(int cpu, int state, unsigned long long *usage)
+{
+	char path[100];
+	FILE *fp;
+
+	sprintf(path, cpuidle_state_usage_path, cpu, state);
+
+	fp = fopen((const char *)path, "r");
+	if (!fp)
+		*usage = 0;
+	else
+		fscanf(fp, "%llu", usage);
+}
+
+void get_cpu_idle_state_time(int cpu, int state, unsigned long long *time)
+{
+	char path[100];
+	FILE *fp;
+
+	sprintf(path, cpuidle_state_time_path, cpu, state);
+
+	fp = fopen((const char *)path, "r");
+	if (!fp)
+		*time = 0;
+	else
+		fscanf(fp, "%llu", time);
+}
+
+void snapshot_idle_state_name(struct idle_state *s) 
+{ 
+	return get_cpu_idle_state_name(s->cpu, s->state, s->name);
+}
+
+
+#define SNAPSHOT(_x, _y)						      \
+static void snapshot_idle_state_##_x##_##_y(struct idle_state *s)              \
+{								               \
+	get_cpu_idle_state_##_x(s->cpu, s->state, &s->_x##_##_y);                 \
+}
+
+SNAPSHOT(usage, before);
+SNAPSHOT(usage, after);
+SNAPSHOT(time, before);
+SNAPSHOT(time, after);
+
+void snapshot_data_before(struct idle_state *s)
+{
+	snapshot_idle_state_usage_before(s);
+	snapshot_idle_state_time_before(s);
+}
+
+void snapshot_data_after(struct idle_state *s)
+{
+	snapshot_idle_state_usage_after(s);
+	snapshot_idle_state_time_after(s);
+}
+
+unsigned long long get_usage_diff(struct idle_state *s)
+{
+	return s->usage_after - s->usage_before;
+}
+
+unsigned long long get_time_diff(struct idle_state *s)
+{
+	return s->time_after - s->time_before;
+}
+
+
 static int pipe_fd_workload[2];
 static int pipe_fd_irritator[MAX_IRRITATORS][2];
 static int nr_irritators = 0;
 
+#define MAX_IDLE_STATES     20
+int nr_idle_states = 0;
+
+struct idle_state irritator_idle_states[MAX_IRRITATORS][MAX_IDLE_STATES];
+struct idle_state workload_idle_states[MAX_IDLE_STATES];
+
+static void init_idle_states(int cpu, struct idle_state *states)
+{
+	int i;
+
+	for (i = 0; i < nr_idle_states; i++) {
+		states[i].cpu = cpu;
+		states[i].state = i;
+		snapshot_idle_state_name(&states[i]);
+	}
+}
+
+static void init_workload_idle_states()
+{
+	init_idle_states(cpu_workload, workload_idle_states);
+}
+
+static void init_irritator_idle_states(int id)
+{
+	init_idle_states(cpu_irritator[id], irritator_idle_states[id]);
+}
+
+static void snapshot_before(struct idle_state *states)
+{
+	int i;
+
+	for (i = 0; i < nr_idle_states; i++)
+		snapshot_data_before(&states[i]);
+}
+
+static void snapshot_after(struct idle_state *states)
+{
+	int i;
+
+	for (i = 0; i < nr_idle_states; i++)
+		snapshot_data_after(&states[i]);
+}
 
 char pipec;
 
@@ -324,10 +495,12 @@ static void *workload_fn(void *arg)
 	signal(SIGALRM, sigalrm_handler);
 	alarm(timeout);
 
+	snapshot_before(workload_idle_states);
 	while (!stop) {
 		wake_all_irritators();
 		workload_fib_iterations();
 	}
+	snapshot_after(workload_idle_states);
 
 	wake_all_irritators();
 
@@ -354,6 +527,7 @@ static void *irritator_fn(void *arg)
 
 	print_irritator_thread_details();
 
+	snapshot_before(irritator_idle_states[c_id]);
 	while (!stop) {
 		irritator_wait(c_id);
 		if (stop)
@@ -362,15 +536,13 @@ static void *irritator_fn(void *arg)
 		irritator_fib_iterations();
 		//wake_workload();
 	}
-
+	snapshot_after(irritator_idle_states[c_id]);
+	
 	/* Wakeup the workload, just in case! */
 	//wake_workload();
 	return NULL;
 }
 
-
-int cpu_workload = 0;
-int cpu_irritator[MAX_IRRITATORS] = {-1};
 
 void print_usage(int argc, char *argv[])
 {
@@ -511,7 +683,7 @@ int main(int argc, char *argv[])
 	pthread_attr_t workload_attr, irritator_attr[MAX_IRRITATORS];
 	int workload_id = -1;
 	int irritator_id[MAX_IRRITATORS];
-	int i;
+	int i, j;
 	double t0_avg_wakeup_time_ns = 0;
 	double t1_avg_wakeup_time_ns = 0;
 	unsigned long long total_ops = 0;
@@ -537,11 +709,15 @@ int main(int argc, char *argv[])
 
 	setpgid(getpid(), getpid());
 
+	nr_idle_states = get_nr_idle_states();
+	init_workload_idle_states();
+
 	workload_tid = create_thread("workload", &workload_attr,
 				     workload_fn, cpu_workload, &workload_id);
 
 	for (i = 0; i < nr_irritators;i++) {
 		irritator_id[i] = i;
+		init_irritator_idle_states(i);
 		irritator_tid[i] = create_thread("irritator", &irritator_attr[i],
 						 irritator_fn, cpu_irritator[i],
 						 &irritator_id[i]);
@@ -569,12 +745,34 @@ int main(int argc, char *argv[])
 	debug_printf("Total run time          = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
 	printf("Throughput              = %4.3f Mops/seconds\n",
 		ops_per_second/1000000);
+	printf("CPU %d:\n", cpu_workload);
+	for (j = 0; j < nr_idle_states; j++) {
+		int wcpu = cpu_workload;
+		char *name = workload_idle_states[j].name;
+		unsigned long long usage_diff
+			= get_usage_diff(&workload_idle_states[j]);
+		unsigned long long time_diff
+			= get_time_diff(&workload_idle_states[j]);
+		printf("\tState %10s : Usage = %6llu, Time = %9llu us (%3.2f %)\n",
+			name, usage_diff, time_diff, ((float)time_diff*100)/(timeout * 1000000));
+	}
 
 	for (i = 0; i < nr_irritators; i++) {
 		total_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
 		total_wakeup_count = irritator_wakeup_count[i];
 		printf("Irritator %d average wakeup latency  = %4.3f us\n",
 			i, total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
+		printf("CPU %d:\n", cpu_irritator[i]);
+		for (j = 0; j < nr_idle_states; j++) {
+			int wcpu = cpu_workload;
+			char *name = irritator_idle_states[i][j].name;
+			unsigned long long usage_diff
+				= get_usage_diff(&irritator_idle_states[i][j]);
+			unsigned long long time_diff
+				= get_time_diff(&irritator_idle_states[i][j]);
+			printf("\tState %10s : Usage = %6llu, Time = %9llu us(%3.2f %)\n",
+				name, usage_diff, time_diff, ((float)time_diff*100)/(timeout * 1000000));
+		}
 		
 	}
 		
