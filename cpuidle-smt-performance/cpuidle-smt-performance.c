@@ -50,11 +50,12 @@
 #define barrier() __asm__ __volatile__("": : :"memory")
 
 #if defined(__PPC__)
+
 #define HMT_very_low()		asm volatile("or 31, 31, 31	# very low priority")
 #define HMT_low()		asm volatile("or 1, 1, 1	# low priority")
 #define HMT_medium()		asm volatile("or 2, 2, 2	# medium priority")
 
-#define cpu_relax()	do { HMT_very_low; HMT_low(); HMT_medium(); barrier(); } while (0)
+#define cpu_relax()	do { HMT_very_low(); HMT_low(); HMT_medium(); barrier(); } while (0)
 #elif defined(__x86_64__)
 #define cpu_relax()    do {asm volatile("rep; nop" ::: "memory");} while (0)
 #endif
