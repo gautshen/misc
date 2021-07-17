@@ -758,10 +758,13 @@ int main(int argc, char *argv[])
 	}
 
 	for (i = 0; i < nr_irritators; i++) {
-		total_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
-		total_wakeup_count = irritator_wakeup_count[i];
+		unsigned long long this_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
+		unsigned long long this_wakeup_count = irritator_wakeup_count[i];
+
+		total_wakeup_time_ns += irritator_wakeup_time_total_ns[i];
+		total_wakeup_count += irritator_wakeup_count[i];
 		printf("Irritator %d average wakeup latency  = %4.3f us\n",
-			i, total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
+			i, this_wakeup_count ? ((double)(this_wakeup_time_ns)/((this_wakeup_count)*1000)) : 0);
 		printf("CPU %d:\n", cpu_irritator[i]);
 		for (j = 0; j < nr_idle_states; j++) {
 			int wcpu = cpu_workload;
@@ -775,6 +778,9 @@ int main(int argc, char *argv[])
 		}
 		
 	}
+
+	printf("Overall average wakeup latency = %4.3f us\n",
+		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
 		
 	printf("===============================================\n");
 	pthread_attr_destroy(&workload_attr);
