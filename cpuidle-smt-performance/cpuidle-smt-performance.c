@@ -69,11 +69,6 @@ const char *cpuidle_state_usage_path = "/sys/devices/system/cpu/cpu%d/cpuidle/st
 const char *cpuidle_state_time_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/time";
 
 
-unsigned char stop = 0;
-
-#define READ 0
-#define WRITE 1
-
 #define MAX_IRRITATORS  7
 int cpu_workload = 0;
 int cpu_waker = 0;
@@ -173,13 +168,13 @@ SNAPSHOT(usage, after);
 SNAPSHOT(time, before);
 SNAPSHOT(time, after);
 
-void snapshot_data_before(struct idle_state *s)
+void snapshot_one_before(struct idle_state *s)
 {
 	snapshot_idle_state_usage_before(s);
 	snapshot_idle_state_time_before(s);
 }
 
-void snapshot_data_after(struct idle_state *s)
+void snapshot_one_after(struct idle_state *s)
 {
 	snapshot_idle_state_usage_after(s);
 	snapshot_idle_state_time_after(s);
@@ -204,50 +199,47 @@ static int nr_irritators = 0;
 int nr_idle_states = 0;
 
 struct idle_state irritator_idle_states[MAX_IRRITATORS][MAX_IDLE_STATES];
-struct idle_state workload_idle_states[MAX_IDLE_STATES];
 
-static void init_idle_states(int cpu, struct idle_state *states)
+static void init_irritator_idle_states(int id)
 {
 	int i;
+	int cpu = cpu_irritator[id];
+	struct idle_state *states = irritator_idle_states[id];
 
 	for (i = 0; i < nr_idle_states; i++) {
 		states[i].cpu = cpu;
 		states[i].state = i;
 		snapshot_idle_state_name(&states[i]);
 	}
+
 }
 
-static void init_workload_idle_states()
-{
-	init_idle_states(cpu_workload, workload_idle_states);
-}
-
-static void init_irritator_idle_states(int id)
-{
-	init_idle_states(cpu_irritator[id], irritator_idle_states[id]);
-}
-
-static void snapshot_before(struct idle_state *states)
+static void snapshot_all_before(struct idle_state *states)
 {
 	int i;
 
 	for (i = 0; i < nr_idle_states; i++)
-		snapshot_data_before(&states[i]);
+		snapshot_one_before(&states[i]);
 }
 
-static void snapshot_after(struct idle_state *states)
+static void snapshot_all_after(struct idle_state *states)
 {
 	int i;
 
 	for (i = 0; i < nr_idle_states; i++)
-		snapshot_data_after(&states[i]);
+		snapshot_one_after(&states[i]);
 }
 
 char pipec;
 
+#define READ 0
+#define WRITE 1
+
+
 typedef unsigned long long u64;
 
 
+unsigned char stop = 0;
 static void sigalrm_handler(int junk)
 {
 	stop = 1;
@@ -300,23 +292,20 @@ static void cpuset_to_list(cpu_set_t *cpuset, int size, char *str)
 
 unsigned long long irritator_wakeup_period_ns = 100000ULL;
 
-unsigned long long workload_total_fib_count = 0;
+
 struct wakeup_time {
 	struct timespec begin;
 	struct timespec end;
 };
 
 struct wakeup_time irritator_wakeup_time[MAX_IRRITATORS];
-struct wakeup_time t0_wakeup_time;
-
-unsigned long long t0_wakeup_time_total_ns;
 unsigned long long irritator_wakeup_time_total_ns[MAX_IRRITATORS];
-
-unsigned long long workload_runtime_total_ns;
-unsigned long long t1_runtime_total_ns[MAX_IRRITATORS];
-
-unsigned long long t0_wakeup_count;
 unsigned long long irritator_wakeup_count[MAX_IRRITATORS];
+
+unsigned long long workload_total_fib_count = 0;
+unsigned long long workload_runtime_total_ns;
+
+
 
 int clockid = CLOCK_REALTIME;
 //int clockid = CLOCK_MONOTONIC_RAW;
@@ -350,45 +339,6 @@ static unsigned long long compute_timediff(struct timespec before,
 	return 0;
 }
 
-
-#define UNAVAILABLE    0
-#define AVAILABLE      1
-
-int irritator_futex = UNAVAILABLE;
-static int futex(int *uaddr, int futex_op, int val,
-                 const struct timespec *timeout, int *uaddr2, int val3)
-{
-	return syscall(SYS_futex, uaddr, futex_op, val,
-                       timeout, uaddr, val3);
-}
-
-static void fwait(int *futexp)
-{
-	int s;
-	while (1) {
-		if (__sync_bool_compare_and_swap(futexp, AVAILABLE, UNAVAILABLE))
-			break; /* We have been wokenup */
-
-		s = futex(futexp, FUTEX_WAIT_PRIVATE, UNAVAILABLE, NULL, NULL, 0);
-		if (s == -1 && errno != EAGAIN) {
-			printf("Error futex wait\n");
-			exit(1);
-		}
-	}
-}
-
-static void fpost(int *futexp)
-{
-	if (__sync_bool_compare_and_swap(futexp, UNAVAILABLE, AVAILABLE)) {
-		int s = futex(futexp, FUTEX_WAKE_PRIVATE, AVAILABLE, NULL, NULL, 0);
-		if (s == -1) {
-			printf("Error futex wake\n");
-			exit(1);
-
-		}
-	}
-}
-
 static void wake_all_irritators(void)
 {
 	int i;
@@ -414,7 +364,7 @@ static void irritator_wait(int id)
 	irritator_wakeup_count[id]++;
 }
 
-static void print_irritator_thread_details(void)
+static void print_thread_details(char *threadname)
 {
 	pthread_t thread = pthread_self();
         cpu_set_t *cpuset;
@@ -435,60 +385,7 @@ static void print_irritator_thread_details(void)
 	pthread_getaffinity_np(thread, size, cpuset);
 
 	cpuset_to_list(cpuset, size, cpu_list_str);
-	printf("Irritator[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
-	CPU_FREE(cpuset);
-}
-
-static void print_workload_thread_details(void)
-{
-	pthread_t thread = pthread_self();
-        cpu_set_t *cpuset;
-	size_t size;
-	static int max_cpus = 2048;
-	pid_t my_pid = gettid();
-
-	char cpu_list_str[2048];
-
-	cpuset = CPU_ALLOC(max_cpus);
-	if (cpuset == NULL) {
-		printf("Unable to allocate cpuset\n");
-		exit(1);
-	}
-
-	size = CPU_ALLOC_SIZE(max_cpus);
-	CPU_ZERO_S(size, cpuset);
-
-	pthread_getaffinity_np(thread, size, cpuset);
-
-	cpuset_to_list(cpuset, size, cpu_list_str);
-	printf("Workload[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
-	CPU_FREE(cpuset);
-}
-
-
-static void print_waker_thread_details(void)
-{
-	pthread_t thread = pthread_self();
-        cpu_set_t *cpuset;
-	size_t size;
-	static int max_cpus = 2048;
-	pid_t my_pid = gettid();
-
-	char cpu_list_str[2048];
-
-	cpuset = CPU_ALLOC(max_cpus);
-	if (cpuset == NULL) {
-		printf("Unable to allocate cpuset\n");
-		exit(1);
-	}
-
-	size = CPU_ALLOC_SIZE(max_cpus);
-	CPU_ZERO_S(size, cpuset);
-
-	pthread_getaffinity_np(thread, size, cpuset);
-
-	cpuset_to_list(cpuset, size, cpu_list_str);
-	printf("Waker[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
+	printf("%s[PID %d] affined to CPUs: %s\n", threadname, my_pid, cpu_list_str);
 	CPU_FREE(cpuset);
 }
 
@@ -509,7 +406,6 @@ static void workload_fib_iterations(void)
 	int a = 0, b = 1 , c;
 
 	clock_gettime(clockid, &begin);
-	/* Do some iterations before checking time */
 	for (i = 0; i < FIB_ITER_COUNT; i++) {
 		a = fib_vals[ (i - 2) % FIB_ITER_COUNT];
 		b = fib_vals[ (i - 1) % FIB_ITER_COUNT];
@@ -527,18 +423,14 @@ unsigned long timeout = 5;
 
 static void *workload_fn(void *arg)
 {
-	print_workload_thread_details();
+	print_thread_details("Workload");
 	prep_fib_val_array();
 
 	signal(SIGALRM, sigalrm_handler);
 	alarm(timeout);
 
-	snapshot_before(workload_idle_states);
 	while (!stop)
 		workload_fib_iterations();
-	snapshot_after(workload_idle_states);
-
-
 
 	return NULL;
 }
@@ -548,7 +440,7 @@ static void *waker_fn(void *arg)
 	struct timespec begin, cur;
 	unsigned long long time_diff_ns;
 
-	print_waker_thread_details();
+	print_thread_details("Waker");
 
 	while (!stop) {
 
@@ -583,22 +475,21 @@ static void irritator_fib_iterations(void)
 static void *irritator_fn(void *arg)
 {
 	int c_id = *((int *)arg);
+	char irritator_name[30];
 
-	print_irritator_thread_details();
+	sprintf(irritator_name, "Irritator %d", c_id);
 
-	snapshot_before(irritator_idle_states[c_id]);
+	print_thread_details(irritator_name);
+
+	snapshot_all_before(irritator_idle_states[c_id]);
 	while (!stop) {
 		irritator_wait(c_id);
 		if (stop)
 			break;
 
 		irritator_fib_iterations();
-		//wake_workload();
 	}
-	snapshot_after(irritator_idle_states[c_id]);
-	
-	/* Wakeup the workload, just in case! */
-	//wake_workload();
+	snapshot_all_after(irritator_idle_states[c_id]);
 	return NULL;
 }
 
@@ -776,7 +667,6 @@ int main(int argc, char *argv[])
 	setpgid(getpid(), getpid());
 
 	nr_idle_states = get_nr_idle_states();
-	init_workload_idle_states();
 
 	workload_tid = create_thread("workload", &workload_attr,
 				     workload_fn, cpu_workload, &workload_id);
@@ -812,20 +702,6 @@ int main(int argc, char *argv[])
 
 	debug_printf("Total operations        = %f Mops\n", (double)total_ops/1000000);
 	debug_printf("Total run time          = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
-	printf("Throughput              = %4.3f Mops/seconds\n",
-		ops_per_second/1000000);
-	printf("CPU %d:\n", cpu_workload);
-	for (j = 0; j < nr_idle_states; j++) {
-		int wcpu = cpu_workload;
-		char *name = workload_idle_states[j].name;
-		unsigned long long usage_diff
-			= get_usage_diff(&workload_idle_states[j]);
-		unsigned long long time_diff
-			= get_time_diff(&workload_idle_states[j]);
-		printf("\tState %10s : Usage = %6llu, Time = %9llu us (%3.2f %)\n",
-			name, usage_diff, time_diff, ((float)time_diff*100)/(timeout * 1000000));
-	}
-
 	for (i = 0; i < nr_irritators; i++) {
 		unsigned long long this_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
 		unsigned long long this_wakeup_count = irritator_wakeup_count[i];
@@ -848,6 +724,8 @@ int main(int argc, char *argv[])
 		
 	}
 
+	printf("Throughput              = %4.3f Mops/seconds\n",
+		ops_per_second/1000000);
 	printf("Overall average wakeup latency = %4.3f us\n",
 		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
 		
