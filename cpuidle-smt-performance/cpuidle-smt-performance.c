@@ -52,10 +52,8 @@
 #if defined(__PPC__)
 #define HMT_very_low()		asm volatile("or 31, 31, 31	# very low priority")
 #define HMT_low()		asm volatile("or 1, 1, 1	# low priority")
-#define HMT_medium_low()	asm volatile("or 6, 6, 6	# medium low priority")
 #define HMT_medium()		asm volatile("or 2, 2, 2	# medium priority")
-#define HMT_medium_high()	asm volatile("or 5, 5, 5	# medium high priority")
-#define HMT_high()		asm volatile("or 3, 3, 3	# high priority")
+
 #define cpu_relax()	do { HMT_very_low; HMT_low(); HMT_medium(); barrier(); } while (0)
 #elif defined(__x86_64__)
 #define cpu_relax()    do {asm volatile("rep; nop" ::: "memory");} while (0)
@@ -191,7 +189,6 @@ unsigned long long get_time_diff(struct idle_state *s)
 }
 
 
-static int pipe_fd_workload[2];
 static int pipe_fd_irritator[MAX_IRRITATORS][2];
 static int nr_irritators = 0;
 
@@ -234,10 +231,6 @@ char pipec;
 
 #define READ 0
 #define WRITE 1
-
-
-typedef unsigned long long u64;
-
 
 unsigned char stop = 0;
 static void sigalrm_handler(int junk)
@@ -288,11 +281,6 @@ static void cpuset_to_list(cpu_set_t *cpuset, int size, char *str)
 	}
 }
 
-
-
-unsigned long long irritator_wakeup_period_ns = 100000ULL;
-
-
 struct wakeup_time {
 	struct timespec begin;
 	struct timespec end;
@@ -305,7 +293,7 @@ unsigned long long irritator_wakeup_count[MAX_IRRITATORS];
 unsigned long long workload_total_fib_count = 0;
 unsigned long long workload_runtime_total_ns;
 
-
+unsigned long long irritator_wakeup_period_ns = 100000ULL;
 
 int clockid = CLOCK_REALTIME;
 //int clockid = CLOCK_MONOTONIC_RAW;
@@ -458,20 +446,6 @@ static void *waker_fn(void *arg)
 	return NULL;
 }
 
-static void irritator_fib_iterations(void)
-{
-	int i;
-	struct timespec begin, end;
-	unsigned long long time_diff_ns = 0;
-	int a = 0, b = 1 , c;
-
-	for (i = 0; i < 1; i++) {
-		c = a + b;
-		a = b;
-		b = c;
-	}
-}
-
 static void *irritator_fn(void *arg)
 {
 	int c_id = *((int *)arg);
@@ -484,10 +458,7 @@ static void *irritator_fn(void *arg)
 	snapshot_all_before(irritator_idle_states[c_id]);
 	while (!stop) {
 		irritator_wait(c_id);
-		if (stop)
-			break;
-
-		irritator_fib_iterations();
+		cpu_relax();
 	}
 	snapshot_all_after(irritator_idle_states[c_id]);
 	return NULL;
@@ -636,8 +607,6 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 void print_summary()
 {
 	int i, j;
-	double t0_avg_wakeup_time_ns = 0;
-	double t1_avg_wakeup_time_ns = 0;
 	unsigned long long total_ops = 0;
 	unsigned long long total_runtime_ns = 0;
 	double ops_per_second = 0;
@@ -656,8 +625,6 @@ void print_summary()
 
 	ops_per_second = ((double)total_ops * 1000000000ULL)/total_runtime_ns;
 
-	debug_printf("Total operations        = %f Mops\n", (double)total_ops/1000000);
-	debug_printf("Total run time          = %f seconds \n", (double)total_runtime_ns/1000000000ULL);
 	for (i = 0; i < nr_irritators; i++) {
 		unsigned long long this_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
 		unsigned long long this_wakeup_count = irritator_wakeup_count[i];
@@ -692,12 +659,6 @@ void print_summary()
 static void create_pipes()
 {
 	int i;
-
-	if (pipe(pipe_fd_workload)) {
-
-		printf("Error creating Workload pipes\n");
-		exit(1);
-	}
 
 	for (i = 0; i < nr_irritators; i++) {
 		if (pipe(pipe_fd_irritator[i])) {
