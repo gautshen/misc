@@ -633,13 +633,8 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 	return tid;
 }
 
-int main(int argc, char *argv[])
+void print_summary()
 {
-	signed char c;
-	pthread_t workload_tid, irritator_tid[MAX_IRRITATORS], waker_tid;
-	pthread_attr_t workload_attr, irritator_attr[MAX_IRRITATORS], waker_attr;
-	int workload_id = -1, waker_id = -2;
-	int irritator_id[MAX_IRRITATORS];
 	int i, j;
 	double t0_avg_wakeup_time_ns = 0;
 	double t1_avg_wakeup_time_ns = 0;
@@ -648,45 +643,6 @@ int main(int argc, char *argv[])
 	double ops_per_second = 0;
 	unsigned long long total_wakeup_time_ns = 0;
 	unsigned long long total_wakeup_count = 0;
-
-
-	parse_args(argc, argv);
-	if (pipe(pipe_fd_workload)) {
-
-		printf("Error creating Workload pipes\n");
-		exit(1);
-	}
-
-	for (i = 0; i < nr_irritators; i++) {
-		if (pipe(pipe_fd_irritator[i])) {
-			printf("Error creating Irritator(%d) pipes\n", i);
-			exit(1);
-		}
-	}
-
-	setpgid(getpid(), getpid());
-
-	nr_idle_states = get_nr_idle_states();
-
-	workload_tid = create_thread("workload", &workload_attr,
-				     workload_fn, cpu_workload, &workload_id);
-
-	for (i = 0; i < nr_irritators;i++) {
-		irritator_id[i] = i;
-		init_irritator_idle_states(i);
-		irritator_tid[i] = create_thread("irritator", &irritator_attr[i],
-						 irritator_fn, cpu_irritator[i],
-						 &irritator_id[i]);
-	}
-
-	waker_tid = create_thread("waker", &waker_attr,
-				     waker_fn, cpu_waker, &waker_id);
-
-	pthread_join(workload_tid, NULL);
-	for (i = 0; i < nr_irritators; i++) {
-		pthread_join(irritator_tid[i], NULL);
-	}
-	pthread_join(waker_tid, NULL);
 
 	printf("===============================================\n");
 	printf("                  Summary \n");
@@ -730,9 +686,85 @@ int main(int argc, char *argv[])
 		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
 		
 	printf("===============================================\n");
+}
+
+
+static void create_pipes()
+{
+	int i;
+
+	if (pipe(pipe_fd_workload)) {
+
+		printf("Error creating Workload pipes\n");
+		exit(1);
+	}
+
+	for (i = 0; i < nr_irritators; i++) {
+		if (pipe(pipe_fd_irritator[i])) {
+			printf("Error creating Irritator(%d) pipes\n", i);
+			exit(1);
+		}
+	}
+}
+
+pthread_t workload_tid, irritator_tid[MAX_IRRITATORS], waker_tid;
+pthread_attr_t workload_attr, irritator_attr[MAX_IRRITATORS], waker_attr;
+int workload_id = -1, waker_id = -2;
+int irritator_id[MAX_IRRITATORS];
+
+static void create_threads()
+{
+	int i;
+
+	workload_tid = create_thread("workload", &workload_attr,
+				     workload_fn, cpu_workload, &workload_id);
+
+	for (i = 0; i < nr_irritators;i++) {
+		irritator_id[i] = i;
+		init_irritator_idle_states(i);
+		irritator_tid[i] = create_thread("irritator", &irritator_attr[i],
+						 irritator_fn, cpu_irritator[i],
+						 &irritator_id[i]);
+	}
+
+	waker_tid = create_thread("waker", &waker_attr,
+				     waker_fn, cpu_waker, &waker_id);
+}
+
+static void join_threads()
+{
+	int i;
+
+	pthread_join(workload_tid, NULL);
+	for (i = 0; i < nr_irritators; i++) {
+		pthread_join(irritator_tid[i], NULL);
+	}
+	pthread_join(waker_tid, NULL);
+}
+
+static void cleanup_threads()
+{
+	int i;
+
 	pthread_attr_destroy(&workload_attr);
 	for (i = 0; i < nr_irritators; i++)
 		pthread_attr_destroy(&irritator_attr[i]);
 	pthread_attr_destroy(&waker_attr);
+}
+
+int main(int argc, char *argv[])
+{
+	parse_args(argc, argv);
+	create_pipes();
+
+	setpgid(getpid(), getpid());
+
+	nr_idle_states = get_nr_idle_states();
+
+	create_threads();
+	join_threads();
+	cleanup_threads();
+
+	print_summary();
 	return 0;
 }
