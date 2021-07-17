@@ -47,6 +47,20 @@
 #define debug_printf(fmt...)
 #endif
 
+#define barrier() __asm__ __volatile__("": : :"memory")
+
+#if defined(__PPC__)
+#define HMT_very_low()		asm volatile("or 31, 31, 31	# very low priority")
+#define HMT_low()		asm volatile("or 1, 1, 1	# low priority")
+#define HMT_medium_low()	asm volatile("or 6, 6, 6	# medium low priority")
+#define HMT_medium()		asm volatile("or 2, 2, 2	# medium priority")
+#define HMT_medium_high()	asm volatile("or 5, 5, 5	# medium high priority")
+#define HMT_high()		asm volatile("or 3, 3, 3	# high priority")
+#define cpu_relax()	do { HMT_very_low; HMT_low(); HMT_medium(); barrier(); } while (0)
+#elif defined(__x86_64__)
+#define cpu_relax()    do {asm volatile("rep; nop" ::: "memory");} while (0)
+#endif
+
 
 const char *cpuidle_path = "/sys/devices/system/cpu/cpu%d/cpuidle";
 const char *cpuidle_state_path = "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/";
@@ -62,6 +76,7 @@ unsigned char stop = 0;
 
 #define MAX_IRRITATORS  7
 int cpu_workload = 0;
+int cpu_waker = 0;
 int cpu_irritator[MAX_IRRITATORS] = {-1};
 
 struct idle_state {
@@ -450,7 +465,34 @@ static void print_workload_thread_details(void)
 	CPU_FREE(cpuset);
 }
 
-#define FIB_ITER_COUNT 128
+
+static void print_waker_thread_details(void)
+{
+	pthread_t thread = pthread_self();
+        cpu_set_t *cpuset;
+	size_t size;
+	static int max_cpus = 2048;
+	pid_t my_pid = gettid();
+
+	char cpu_list_str[2048];
+
+	cpuset = CPU_ALLOC(max_cpus);
+	if (cpuset == NULL) {
+		printf("Unable to allocate cpuset\n");
+		exit(1);
+	}
+
+	size = CPU_ALLOC_SIZE(max_cpus);
+	CPU_ZERO_S(size, cpuset);
+
+	pthread_getaffinity_np(thread, size, cpuset);
+
+	cpuset_to_list(cpuset, size, cpu_list_str);
+	printf("Waker[PID %d] affined to CPUs: %s\n", my_pid, cpu_list_str);
+	CPU_FREE(cpuset);
+}
+
+#define FIB_ITER_COUNT (1 << 16)
 int fib_vals[FIB_ITER_COUNT];
 
 static void prep_fib_val_array(void)
@@ -467,26 +509,22 @@ static void workload_fib_iterations(void)
 	int a = 0, b = 1 , c;
 
 	clock_gettime(clockid, &begin);
-	while (1) {
-		/* Do some iterations before checking time */
-		for (i = 0; i < FIB_ITER_COUNT; i++) {
-			a = fib_vals[ (i - 2) % FIB_ITER_COUNT];
-			b = fib_vals[ (i - 1) % FIB_ITER_COUNT];
-			c = a + b;
-			fib_vals[i] = c;
-		}
-
-		workload_total_fib_count += FIB_ITER_COUNT;
-		clock_gettime(clockid, &end);
-		time_diff_ns = compute_timediff(begin, end);
-		if (time_diff_ns > irritator_wakeup_period_ns)
-			break;
+	/* Do some iterations before checking time */
+	for (i = 0; i < FIB_ITER_COUNT; i++) {
+		a = fib_vals[ (i - 2) % FIB_ITER_COUNT];
+		b = fib_vals[ (i - 1) % FIB_ITER_COUNT];
+		c = a + b;
+		fib_vals[i] = c;
 	}
 
-	workload_runtime_total_ns += compute_timediff(begin, end);
+	workload_total_fib_count += FIB_ITER_COUNT;
+	clock_gettime(clockid, &end);
+	time_diff_ns = compute_timediff(begin, end);
+	workload_runtime_total_ns += time_diff_ns;
 }
 
 unsigned long timeout = 5;
+
 static void *workload_fn(void *arg)
 {
 	print_workload_thread_details();
@@ -496,14 +534,35 @@ static void *workload_fn(void *arg)
 	alarm(timeout);
 
 	snapshot_before(workload_idle_states);
-	while (!stop) {
-		wake_all_irritators();
+	while (!stop)
 		workload_fib_iterations();
-	}
 	snapshot_after(workload_idle_states);
 
-	wake_all_irritators();
 
+
+	return NULL;
+}
+
+static void *waker_fn(void *arg)
+{
+	struct timespec begin, cur;
+	unsigned long long time_diff_ns;
+
+	print_waker_thread_details();
+
+	while (!stop) {
+
+		clock_gettime(clockid, &begin);
+		do {
+			cpu_relax();
+			clock_gettime(clockid, &cur);
+			time_diff_ns = compute_timediff(begin, cur);
+		} while (time_diff_ns <= irritator_wakeup_period_ns);
+
+		wake_all_irritators();
+	}
+
+	wake_all_irritators();
 	return NULL;
 }
 
@@ -550,6 +609,7 @@ void print_usage(int argc, char *argv[])
 	printf("Following options are available\n");
 	printf("-w, --wcpu\t\t\t The CPU to which the workload should be affined\n");
 	printf("-i, --icpu\t\t\t The CPU to which the irritator should be affined\n");
+	printf("-a, --acpu\t\t\t The CPU running the waker of the irritators\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
 	printf("-r, --runtime\t\t\t Amount of time in microseconds irritators should  be woken up\n");
 }
@@ -565,6 +625,7 @@ void parse_args(int argc, char *argv[])
 		static struct option long_options[] = {
 			{"wcpu", required_argument, 0, 'w'},
 			{"icpu", required_argument, 0, 'i'},
+			{"acpu", required_argument, 0, 'a'},
 			{"runtime", required_argument, 0, 'r'},
 			{"timeout", required_argument, 0, 't'},
 			{0, 0, 0, 0},
@@ -573,7 +634,7 @@ void parse_args(int argc, char *argv[])
 		int option_index = 0;
 		int cpu;
 
-		c = getopt_long(argc, argv, "hw:i:r:t:", long_options, &option_index);
+		c = getopt_long(argc, argv, "hw:i:a:r:t:", long_options, &option_index);
 
 		/* Options are done */
 		if (c == -1)
@@ -605,6 +666,11 @@ void parse_args(int argc, char *argv[])
 				debug_printf("Got option to pin the irritator to CPU %d\n", cpu);//cpu_irritator[nr_irritators]);
 				nr_irritators++;
 			}
+			break;
+		case 'a':
+			cpu_waker = (int) strtoul(optarg, NULL, 10);
+			debug_printf("Got option to pin the waker to CPU %d\n",
+				cpu_workload);
 			break;
 
 		case 'r':
@@ -679,9 +745,9 @@ pthread_t create_thread(const char *name, pthread_attr_t *attr, void *(*fn)(void
 int main(int argc, char *argv[])
 {
 	signed char c;
-	pthread_t workload_tid, irritator_tid[MAX_IRRITATORS];
-	pthread_attr_t workload_attr, irritator_attr[MAX_IRRITATORS];
-	int workload_id = -1;
+	pthread_t workload_tid, irritator_tid[MAX_IRRITATORS], waker_tid;
+	pthread_attr_t workload_attr, irritator_attr[MAX_IRRITATORS], waker_attr;
+	int workload_id = -1, waker_id = -2;
 	int irritator_id[MAX_IRRITATORS];
 	int i, j;
 	double t0_avg_wakeup_time_ns = 0;
@@ -722,12 +788,15 @@ int main(int argc, char *argv[])
 						 irritator_fn, cpu_irritator[i],
 						 &irritator_id[i]);
 	}
-	
+
+	waker_tid = create_thread("waker", &waker_attr,
+				     waker_fn, cpu_waker, &waker_id);
+
 	pthread_join(workload_tid, NULL);
 	for (i = 0; i < nr_irritators; i++) {
 		pthread_join(irritator_tid[i], NULL);
 	}
-
+	pthread_join(waker_tid, NULL);
 
 	printf("===============================================\n");
 	printf("                  Summary \n");
@@ -786,6 +855,6 @@ int main(int argc, char *argv[])
 	pthread_attr_destroy(&workload_attr);
 	for (i = 0; i < nr_irritators; i++)
 		pthread_attr_destroy(&irritator_attr[i]);
-
+	pthread_attr_destroy(&waker_attr);
 	return 0;
 }
