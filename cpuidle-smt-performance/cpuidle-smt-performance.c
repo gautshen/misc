@@ -289,6 +289,7 @@ struct wakeup_time {
 
 struct wakeup_time irritator_wakeup_time[MAX_IRRITATORS];
 unsigned long long irritator_wakeup_time_total_ns[MAX_IRRITATORS];
+unsigned long long irritator_sleep_time_total_ns[MAX_IRRITATORS];
 unsigned long long irritator_wakeup_count[MAX_IRRITATORS];
 
 unsigned long long workload_total_fib_count = 0;
@@ -340,16 +341,20 @@ static void wake_all_irritators(void)
 
 static void irritator_wait(int id)
 {
-	unsigned long long diff;
+	unsigned long long wakeup_diff, sleep_diff;
+	struct timespec sleep_begin;
 
 	debug_printf("Irritator %d waiting\n", id);
+	clock_gettime(clockid, &sleep_begin);
 	assert(read(pipe_fd_irritator[id][READ], &pipec, 1) == 1);
 	clock_gettime(clockid, &(irritator_wakeup_time[id].end));
-	diff = compute_timediff(irritator_wakeup_time[id].begin,
+	wakeup_diff = compute_timediff(irritator_wakeup_time[id].begin,
 				 irritator_wakeup_time[id].end);
-	irritator_wakeup_time_total_ns[id] += diff;
-	debug_printf("Irritator %d wokeup. latency = %lld ns\n", id,
-		     diff);
+	irritator_wakeup_time_total_ns[id] += wakeup_diff;
+	sleep_diff = compute_timediff(sleep_begin, irritator_wakeup_time[id].end);
+	irritator_sleep_time_total_ns[id] += sleep_diff;
+	debug_printf("Irritator %d wokeup. sleep duration = %lld ns, latency = %lld ns\n", id,
+		     sleep_diff, wakeup_diff);
 	irritator_wakeup_count[id]++;
 }
 
@@ -612,6 +617,7 @@ void print_summary()
 	unsigned long long total_runtime_ns = 0;
 	double ops_per_second = 0;
 	unsigned long long total_wakeup_time_ns = 0;
+	unsigned long long total_sleep_time_ns = 0;
 	unsigned long long total_wakeup_count = 0;
 
 	printf("===============================================\n");
@@ -628,10 +634,14 @@ void print_summary()
 
 	for (i = 0; i < nr_irritators; i++) {
 		unsigned long long this_wakeup_time_ns = irritator_wakeup_time_total_ns[i];
+		unsigned long long this_sleep_time_ns = irritator_sleep_time_total_ns[i];
 		unsigned long long this_wakeup_count = irritator_wakeup_count[i];
 
-		total_wakeup_time_ns += irritator_wakeup_time_total_ns[i];
-		total_wakeup_count += irritator_wakeup_count[i];
+		total_wakeup_time_ns += this_wakeup_time_ns;
+		total_sleep_time_ns += this_sleep_time_ns;
+		total_wakeup_count += this_wakeup_count;
+		printf("Irritator %d average sleep duration  = %4.3f us\n",
+			i, this_wakeup_count ? ((double)(this_sleep_time_ns)/((this_wakeup_count)*1000)) : 0);
 		printf("Irritator %d average wakeup latency  = %4.3f us\n",
 			i, this_wakeup_count ? ((double)(this_wakeup_time_ns)/((this_wakeup_count)*1000)) : 0);
 		printf("CPU %d:\n", cpu_irritator[i]);
@@ -648,8 +658,10 @@ void print_summary()
 		
 	}
 
-	printf("Throughput              = %4.3f Mops/seconds\n",
+	printf("Workload Throughput            = %4.3f Mops/seconds\n",
 		ops_per_second/1000000);
+	printf("Overall average sleep duration = %4.3f us\n",
+		total_wakeup_count ? ((double)(total_sleep_time_ns)/((total_wakeup_count)*1000)) : 0);
 	printf("Overall average wakeup latency = %4.3f us\n",
 		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
 		
