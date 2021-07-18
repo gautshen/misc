@@ -471,6 +471,7 @@ static void *irritator_fn(void *arg)
 }
 
 
+int verbose_print = 0;
 void print_usage(int argc, char *argv[])
 {
 	printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -480,6 +481,7 @@ void print_usage(int argc, char *argv[])
 	printf("-a, --acpu\t\t\t The CPU running the waker of the irritators\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
 	printf("-r, --runtime\t\t\t Amount of time in microseconds irritators should  be woken up\n");
+	printf("    --verbose\t\t\t Print verbose stats\n");
 }
 
 void parse_args(int argc, char *argv[])
@@ -496,6 +498,7 @@ void parse_args(int argc, char *argv[])
 			{"acpu", required_argument, 0, 'a'},
 			{"runtime", required_argument, 0, 'r'},
 			{"timeout", required_argument, 0, 't'},
+			{"verbose", no_argument, &verbose_print, 1},
 			{0, 0, 0, 0},
 		};
 
@@ -619,6 +622,8 @@ void print_summary()
 	unsigned long long total_wakeup_time_ns = 0;
 	unsigned long long total_sleep_time_ns = 0;
 	unsigned long long total_wakeup_count = 0;
+	unsigned long long idle_state_total_usage[MAX_IDLE_STATES] = {0};
+	unsigned long long idle_state_total_time_us[MAX_IDLE_STATES] = {0};
 
 	printf("===============================================\n");
 	printf("                  Summary \n");
@@ -640,11 +645,13 @@ void print_summary()
 		total_wakeup_time_ns += this_wakeup_time_ns;
 		total_sleep_time_ns += this_sleep_time_ns;
 		total_wakeup_count += this_wakeup_count;
-		printf("Irritator %d average sleep duration  = %4.3f us\n",
-			i, this_wakeup_count ? ((double)(this_sleep_time_ns)/((this_wakeup_count)*1000)) : 0);
-		printf("Irritator %d average wakeup latency  = %4.3f us\n",
-			i, this_wakeup_count ? ((double)(this_wakeup_time_ns)/((this_wakeup_count)*1000)) : 0);
-		printf("CPU %d:\n", cpu_irritator[i]);
+		if (verbose_print) {
+			printf("Irritator %d average sleep duration  = %4.3f us\n",
+				i, this_wakeup_count ? ((double)(this_sleep_time_ns)/((this_wakeup_count)*1000)) : 0);
+			printf("Irritator %d average wakeup latency  = %4.3f us\n",
+				i, this_wakeup_count ? ((double)(this_wakeup_time_ns)/((this_wakeup_count)*1000)) : 0);
+			printf("CPU %d:\n", cpu_irritator[i]);
+		}
 		for (j = 0; j < nr_idle_states; j++) {
 			int wcpu = cpu_workload;
 			char *name = irritator_idle_states[i][j].name;
@@ -652,8 +659,12 @@ void print_summary()
 				= get_usage_diff(&irritator_idle_states[i][j]);
 			unsigned long long time_diff
 				= get_time_diff(&irritator_idle_states[i][j]);
-			printf("\tState %10s : Usage = %6llu, Time = %9llu us(%3.2f %)\n",
-				name, usage_diff, time_diff, ((float)time_diff*100)/(timeout * 1000000));
+			idle_state_total_usage[j] += usage_diff;
+			idle_state_total_time_us[j] += time_diff;
+			if (verbose_print) {
+				printf("\tState %10s : Usage = %8llu, Time = %9llu us(%3.2f %)\n",
+					name, usage_diff, time_diff, ((float)time_diff*100)/(timeout * 1000000));
+			}
 		}
 		
 	}
@@ -664,6 +675,15 @@ void print_summary()
 		total_wakeup_count ? ((double)(total_sleep_time_ns)/((total_wakeup_count)*1000)) : 0);
 	printf("Overall average wakeup latency = %4.3f us\n",
 		total_wakeup_count ? ((double)(total_wakeup_time_ns)/((total_wakeup_count)*1000)) : 0);
+
+	for (j = 0; j < nr_idle_states; j++) {
+		int i = 0;
+		char *name = irritator_idle_states[i][j].name;
+		unsigned long long avg_usage = idle_state_total_usage[j]/nr_irritators;
+		unsigned long long avg_time_us = idle_state_total_time_us[j]/nr_irritators;
+		printf("\tOverall State %10s : Usage = %8llu, Time = %9llu us(%3.2f %)\n",
+			name, avg_usage, avg_time_us, ((float)avg_time_us*100)/(timeout * 1000000));
+	}
 		
 	printf("===============================================\n");
 }
