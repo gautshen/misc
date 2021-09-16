@@ -1,8 +1,8 @@
 /*
  * futex-scalability.c :
  *
- * A program where a given number of threads contend for access to a
- * critical section that is guarded by a mutex. The mutex is
+ * A test program where a given number of threads contend for access
+ * to a critical section that is guarded by a mutex. The mutex is
  * implemented using a futex. The user can provide how many times
  * should the mutex implementation retry the atomic Compare-And-Swap
  * operation before making the futex call. The user can also specify

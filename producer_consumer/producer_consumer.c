@@ -406,7 +406,7 @@ unsigned char stop = 0;
 #undef L1_CONTAINED
 
 #if defined(__PPC__)
-#define L1_CACHE_SHIFT		7
+#define L1_CACHE_SHIFT		7          //Each cacheline is 128 bytes long
 #define L1_CACHE_SIZE		(32*1024)  //32K
 #define L2_CACHE_SIZE		(512*1024) //512K
 #else
@@ -425,7 +425,7 @@ unsigned char stop = 0;
 #define CACHE_SIZE		L2_CACHE_SIZE
 #endif
 
-#define INDEX_ARRAY_SIZE (CACHE_SIZE >> L1_CACHE_SHIFT) //
+#define INDEX_ARRAY_SIZE (CACHE_SIZE >> L1_CACHE_SHIFT) //max number of iterations is bounded by number of cachelines
 #define DATA_ARRAY_SIZE  (INDEX_ARRAY_SIZE*1024)
 
 
