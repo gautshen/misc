@@ -909,13 +909,13 @@ void print_usage(int argc, char *argv[])
 {
 	printf("Usage: %s [OPTIONS]\n", argv[0]);
 	printf("Following options are available\n");
-	printf("-p, --pcpu\t\t\t The CPU to which the producer should be affined\n");
-	printf("-c, --ccpu\t\t\t The CPU to which the producer should be affined\n");
+	printf("-p, --pcpu\t\t\t The CPU to which the producer should be affined (-1 for no affinity)\n");
+	printf("-c, --ccpu\t\t\t The CPU to which this consumer should be affined (-1 for no affinity)\n");
 	printf("-r, --random-seed\t\t The seed used for random number generation\n");
 	printf("-l, --iteration-length\t\t The number of loads per consumer-iteration\n");
 	printf("-s, --cache-size\t\t Size of the cache in bytes.\n");
 	printf("-t, --timeout\t\t\t Number of seconds to run the benchmark\n");
-	printf("-f, --fib\t\t\t  The number of fibonacci numbers to compute by the consumer\n");
+	printf("-f, --fib\t\t\t  The number of fibonacci numbers to compute by the consumer (optional)\n");
 	printf("    --print-cache-stats\t\t Print cache-access statistics\n");
 	printf("    --verbose\t\t\t Print all data\n");
 	printf("    --precompute-random\t\t\t Precompute the random-access pattern\n");
