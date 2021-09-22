@@ -273,7 +273,7 @@ static void *thread_fn(void *arg)
 	int my_idx = *((int *)arg);
 	struct timespec cur;
 	clock_gettime(clockid, &cur);
-	printf("[%lld.%lld] %d thread is active\n",
+	debug_printf("[%lld.%lld] %d thread is active\n",
 		cur.tv_sec, cur.tv_nsec, my_idx);
 
 	debug_printf("critical section time = %lld ns\n", critical_section_time_ns);
@@ -287,7 +287,7 @@ static void *thread_fn(void *arg)
 		critical_section(my_idx);
 
 	clock_gettime(clockid, &cur);
-	printf("[%lld.%lld] %d thread exiting...\n",
+	debug_printf("[%lld.%lld] %d thread exiting...\n",
 		cur.tv_sec, cur.tv_nsec, my_idx);
 	
 	return NULL;
@@ -412,15 +412,14 @@ int main(int argc, char *argv[])
 	for (i = 0; i < nr_threads; i++)
 		pthread_attr_destroy(&thread_attr[i]);
 
-	printf("The number of entries in the critical section = %lld (%6.6f M entries/s)\n",
-		critical_section_entries,
-		((double) critical_section_entries/timeout)/1000000);
-
-
 	for (i = 0; i < nr_threads; i++) {
 		printf("Thread %d = %ld entries\n", i,
 			thread_entries[i]);
 	}
+
+	printf("The number of entries in the critical section = %lld (%6.6f M entries/s)\n",
+		critical_section_entries,
+		((double) critical_section_entries/timeout)/1000000);
 
 	return 0;
 }
